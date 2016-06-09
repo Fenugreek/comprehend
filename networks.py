@@ -153,14 +153,11 @@ class RBM(Auto):
 
     def free_energy(self, v):
         """Approx free energy of system given visible unit values."""
-#        Wx_b = tf.matmul(v, self.W) + self.bhid
-#        vbias_term = tf.matmul(v, tf.expand_dims(self.bvis, 1))
-#        hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)),
-#                                    reduction_indices=[1])
-#        return -hidden_term - vbias_term
-
-        product = tf.reduce_sum(v * self.recode(v), reduction_indices=[1])
-        return -tf.log(product)
+        Wx_b = tf.matmul(v, self.W) + self.bhid
+        vbias_term = tf.matmul(v, tf.expand_dims(self.bvis, 1))
+        hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)),
+                                    reduction_indices=[1])
+        return -hidden_term - vbias_term
     
     
     def sample_h_given_v(self, v):
