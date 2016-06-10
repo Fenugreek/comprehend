@@ -65,11 +65,11 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     
     train_step = tf.train.AdagradOptimizer(learning_rate)\
                      .minimize(coder.cost(*train_args))
-
     sess.run(tf.initialize_all_variables())
+
     if verbose:
-        print('Initial cost  r.m.s. loss %.3f' %
-              (#coder.cost(*valid_args).eval(),
+        print('Initial cost %.2f, r.m.s. loss %.3f' %
+              (coder.cost(*valid_args).eval(feed_dict={x: validation_set[:batch_size]}),
                coder.rms_loss(validation_set).eval()))
     
     for epoch in range(training_epochs):
@@ -81,6 +81,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             train_step.run(feed_dict=feed)
 
         if verbose:
-            print('Training epoch %d, cost  r.m.s. loss %.3f ' %
-                  (epoch,# coder.cost(*valid_args).eval(),
+            print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
+                  (epoch,
+                   coder.cost(*valid_args).eval(feed_dict={x: validation_set[:batch_size]}),
                    coder.rms_loss(validation_set).eval()))
