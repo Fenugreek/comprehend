@@ -128,7 +128,7 @@ class Auto(object):
         """
         Root-mean-squared difference between <inputs> and encoded-decoded output.
         """
-        loss = (inputs - self.recode(inputs)) ** 2
+        loss = tf.squared_difference(inputs, self.recode(inputs))
         return tf.reduce_mean(tf.reduce_mean(loss, reduction_indices=[1]) ** .5)
         
 
@@ -140,16 +140,21 @@ class Auto(object):
 class RBM(Auto):
     """Restricted Boltzmann Machine. Adapted from deeplearning.net."""
 
-    def __init__(self, CDk=15, **kwargs):
+    def __init__(self, CDk=1, persistent=True, **kwargs):
         """
         CDk:
         Number of Gibbs sampling steps to use for contrastive divergence
         when computing cost.
+
+        persistent:
+        Set to True to use persistend CD.
         """
         
         Auto.__init__(self, **kwargs)
         self.CDk = CDk
-        
+        self.persistent = persistent
+        self.chain_end = None
+
 
     def free_energy(self, v):
         """Approx free energy of system given visible unit values."""
@@ -160,6 +165,14 @@ class RBM(Auto):
         return -hidden_term - vbias_term
     
     
+    def energy(self, v):
+        Wx_b = tf.matmul(v, self.W) + self.bhid
+        vbias_term = tf.matmul(v, tf.expand_dims(self.bvis, 1))
+        cross_term = tf.batch_matmul(tf.expand_dims(tf.sigmoid(Wx_b), 2),
+                                     tf.expand_dims(Wx_b, 2), adj_x=True)
+        return -vbias_term - tf.squeeze(cross_term, [2])
+
+
     def sample_h_given_v(self, v):
         """Given visible unit values, sample hidden unit values."""
         mean_h = self.get_hidden_values(v)
@@ -194,21 +207,39 @@ class RBM(Auto):
         return h1, v1
 
 
+    def sample_chain(self, inputs):
+
+        if self.chain_end[1] is None:
+            print('.',)
+            self.chain_end = [None, self.sample_h_given_v(inputs)]
+        else: print(self.chain_end[1].get_shape())
+        
+        for k in range(self.CDk):
+            self.chain_end = list(self.gibbs_hvh(self.chain_end[1]))
+
+        if not self.persistent: self.chain_end[1] = None
+        
+        return self.chain_end[0]
+        
+            
     def cost(self, inputs):
         """
         Cost for given input batch of samples, under current params.
         Mean cross entropy.
         """
 
-        # XXX considered using tf.stop_gradient() but it turned out to
-        #     be unnecessary.
-        chain_end = None, self.sample_h_given_v(inputs)
+        chain_end = None, (self.sample_h_given_v(inputs) if self.chain_end is None
+                           else self.chain_end)
         for k in range(self.CDk):
             chain_end = self.gibbs_hvh(chain_end[1])
+        chain_sample = tf.stop_gradient(chain_end[0])
 
-        sample = chain_end[0]
-        return tf.reduce_mean(self.free_energy(inputs)) - \
-               tf.reduce_mean(self.free_energy(sample))
+        self.chain_end = None
+        return -tf.reduce_mean(self.free_energy(chain_sample))
+#        return tf.reduce_mean(self.free_energy(inputs)) - \
+#               tf.reduce_mean(self.free_energy(chain_sample))
+#        return tf.reduce_mean(self.energy(inputs)) - \
+#               tf.reduce_mean(self.energy(chain_sample))
 
 
 class RNN(Auto):
