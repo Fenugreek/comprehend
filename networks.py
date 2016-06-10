@@ -165,14 +165,6 @@ class RBM(Auto):
         return -hidden_term - vbias_term
     
     
-    def energy(self, v):
-        Wx_b = tf.matmul(v, self.W) + self.bhid
-        vbias_term = tf.matmul(v, tf.expand_dims(self.bvis, 1))
-        cross_term = tf.batch_matmul(tf.expand_dims(tf.sigmoid(Wx_b), 2),
-                                     tf.expand_dims(Wx_b, 2), adj_x=True)
-        return -vbias_term - tf.squeeze(cross_term, [2])
-
-
     def sample_h_given_v(self, v):
         """Given visible unit values, sample hidden unit values."""
         mean_h = self.get_hidden_values(v)
@@ -209,15 +201,11 @@ class RBM(Auto):
 
     def sample_chain(self, inputs):
 
-        if self.chain_end[1] is None:
-            print('.',)
+        if not self.persistent or self.chain_end is None:
             self.chain_end = [None, self.sample_h_given_v(inputs)]
-        else: print(self.chain_end[1].get_shape())
         
         for k in range(self.CDk):
             self.chain_end = list(self.gibbs_hvh(self.chain_end[1]))
-
-        if not self.persistent: self.chain_end[1] = None
         
         return self.chain_end[0]
         
@@ -228,18 +216,8 @@ class RBM(Auto):
         Mean cross entropy.
         """
 
-        chain_end = None, (self.sample_h_given_v(inputs) if self.chain_end is None
-                           else self.chain_end)
-        for k in range(self.CDk):
-            chain_end = self.gibbs_hvh(chain_end[1])
-        chain_sample = tf.stop_gradient(chain_end[0])
-
-        self.chain_end = None
-        return -tf.reduce_mean(self.free_energy(chain_sample))
-#        return tf.reduce_mean(self.free_energy(inputs)) - \
-#               tf.reduce_mean(self.free_energy(chain_sample))
-#        return tf.reduce_mean(self.energy(inputs)) - \
-#               tf.reduce_mean(self.energy(chain_sample))
+        return tf.reduce_mean(self.free_energy(inputs)) - \
+               tf.reduce_mean(self.free_energy(self.sample_chain(inputs)))
 
 
 class RNN(Auto):
@@ -420,3 +398,63 @@ class RNN(Auto):
         
         return results.T, (2 * length + 1, row_len)
 
+
+class RNNRBM(RBM, RNN):
+    """Recurrent RBM neural network."""
+
+    def __init__(self, CDk=3, persistent=True, **kwargs):
+        """
+        CDk:
+        Number of Gibbs sampling steps to use for contrastive divergence
+        when computing cost.
+
+        persistent:
+        Set to True to use persistend CD.
+        """
+        
+        RNN.__init__(self, **kwargs)
+        self.CDk = CDk
+        self.persistent = persistent
+        self.chain_end = None
+
+
+    def get_hidden_values(self, v, presigmoid=False):
+        
+        batch_size, sample_size = v.get_shape().as_list()
+        side = self.n_visible
+        times = sample_size // side
+
+        h = []
+        for index in range(0, sample_size, side):
+            if len(h):
+                states = tf.sigmoid(h[-1]) if presigmoid else h[-1]
+            else: states = tf.zeros([batch_size, self.n_hidden], dtype=tf.float32)
+
+            arg = tf.matmul(v[:, index:index+side], self.Wxh) + \
+                  tf.matmul(states, self.Whh) + self.bhid
+            h.append(arg if presigmoid else tf.sigmoid(arg))
+
+        return tf.pack(h)
+
+
+    def get_reconstructed_input(self, hidden):
+
+        W = self.Why or tf.transpose(self.Wxh)
+        outputs = [tf.sigmoid(tf.matmul(h, W) + self.bvis)
+                   for h in tf.unpack(hidden)]
+        return tf.concat(1, outputs)
+
+
+    def free_energy(self, visible):
+
+        batch = visible.get_shape()[0].value
+        v = tf.reshape(visible, [batch, self.n_visible, -1])
+
+        vbias_term = [tf.reduce_sum(tf.matmul(vv, tf.expand_dims(self.bvis, 1)))
+                      for vv in tf.unpack(v)]
+
+        hidden = self.get_hidden_values(visible, presigmoid=True)
+        hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(hidden)),
+                                    reduction_indices=[0, 2])
+
+        return -hidden_term - tf.pack(vbias_term)
