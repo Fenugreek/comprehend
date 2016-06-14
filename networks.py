@@ -14,13 +14,13 @@ import numpy as np
 from numpy.random import randint, random_sample
 import cPickle
 
-import functions
+import functions, train
 from tamarind.functions import sigmoid, unit_scale
 
 class Auto(object):
     """Auto-Encoder. Adapted from deeplearning.net."""
 
-    def __init__(self, n_visible=784, n_hidden=500, corruption=0.0,
+    def __init__(self, n_visible=784, n_hidden=500, verbose=False,
                  random_seed=123, fromfile=None, W=None, bhid=None, bvis=None):
         """
         Initialize the object by specifying the number of visible units (the
@@ -36,6 +36,9 @@ class Auto(object):
 
         :type n_hidden: int
         :param n_hidden:  number of hidden units
+
+        :type verbose: bool
+        :param verbose:  whether to print certain log messages.
 
         :type fromfile: str
         :param fromfile:  initialize params from this saved file
@@ -58,7 +61,7 @@ class Auto(object):
         
         self.n_visible = n_visible
         self.n_hidden = n_hidden
-        self.corruption = corruption
+        self.verbose = verbose
 
         if fromfile is not None:
             save_file = open(fromfile)
@@ -82,6 +85,10 @@ class Auto(object):
         self.bhid = bhid
         self.bvis = bvis
         self.params = [self.W, self.bhid, self.bvis]
+
+        # To be used for training by tf.Optimizer objects.
+        self.train_args = [tf.placeholder(tf.float32,
+                                          shape=[None, self.n_visible])]
 
     
     def save_params(self, filename):
@@ -114,17 +121,16 @@ class Auto(object):
         return self.get_reconstructed_input(y)
 
 
-    def cost(self, inputs, target=None):
+    def cost(self, inputs):
         """
         Cost for given input batch of samples, under current params.
-        Mean cross entropy.
+        Mean cross entropy between input and encode-decoded input.
         """
-        if target is None: target = inputs
-        loss = functions.cross_entropy(target, self.recode(inputs))
+        loss = functions.cross_entropy(inputs, self.recode(inputs))
         return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1]))
 
 
-    def rms_loss(self, inputs, target=None):
+    def rms_loss(self, inputs):
         """
         Root-mean-squared difference between <inputs> and encoded-decoded output.
         """
@@ -135,6 +141,64 @@ class Auto(object):
     def features(self, *args):
         """Return weights in suitable manner for plotting."""
         return self.W.eval().T
+
+
+    def cost_args(self, dataset):
+        """Return args to self.cost() for given dataset."""
+        return [dataset]
+
+
+    def train_feed(self, data):
+        """Return feed_dict based on data to be used for training."""
+        return {self.train_args[0]: data}
+
+
+class Denoising(Auto):
+    """
+    Denoising Auto-Encoder.
+    
+    Same as Auto-Encoder except cost is computed by encode-decoding
+    a corrupted copy of the input.
+    """
+    
+
+    def __init__(self, corruption=0.3, **kwargs):
+        """
+        corruption:
+        Fraction of input elements chosen at random,
+        and set to the mean value of input,
+        before encode-decoding for the purpose of cost calculation.
+        """
+
+        Auto.__init__(self, **kwargs)
+        self.corruption = corruption
+
+        # Train args has an additional element:
+        #   the corrupted version of the input.
+        self.train_args.append(tf.placeholder(tf.float32,
+                                              shape=[None, self.n_visible]))
+        
+
+    def cost(self, inputs, corrupts):
+        """
+        Cost for given input batch of samples, under current params.
+        Mean cross entropy between input and encode-decoded corrupted
+        version of the input.
+        """
+        loss = functions.cross_entropy(inputs, self.recode(corrupts))
+        return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1]))
+
+
+    def cost_args(self, data):
+        """Return args to self.cost() for given dataset."""
+        return [data, train.corrupt(data, self.corruption)]
+
+
+    def train_feed(self, data):
+        """Return feed_dict based on data to be used for training."""
+        return {self.train_args[0]: data,
+                self.train_args[1]: train.corrupt(data, self.corruption)}
+
 
 
 class RBM(Auto):
@@ -153,30 +217,41 @@ class RBM(Auto):
         Auto.__init__(self, **kwargs)
         self.CDk = CDk
         self.persistent = persistent
-        self.chain_end = None
 
+        # Train args has an additional element:
+        #   sample coming from the Gibbs chain.
+        self.train_args.append(tf.placeholder(tf.float32,
+                                              shape=[None, self.n_visible]))
+
+        # Store end of the Gibbs chain here.
+        self.chain_end = None
+        
 
     def free_energy(self, v):
         """Approx free energy of system given visible unit values."""
+
         Wx_b = tf.matmul(v, self.W) + self.bhid
         vbias_term = tf.matmul(v, tf.expand_dims(self.bvis, 1))
         hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)),
                                     reduction_indices=[1])
+
         return -hidden_term - vbias_term
     
     
     def sample_h_given_v(self, v):
         """Given visible unit values, sample hidden unit values."""
-        mean_h = self.get_hidden_values(v)
-        rnds = random_sample(mean_h.get_shape().as_list())
-        return tf.cast(mean_h > rnds, tf.float32)
+
+        mean_h = sigmoid(np.dot(v, self.W.eval()) + self.bhid.eval())
+        rnds = random_sample(mean_h.shape)
+        return (mean_h > rnds).astype(np.float32)
         
 
     def sample_v_given_h(self, h):
         """Given hidden unit values, sample visible unit values."""
-        mean_v = self.get_reconstructed_input(h)
-        rnds = random_sample(mean_v.get_shape().as_list())
-        return tf.cast(mean_v > rnds, tf.float32)
+
+        mean_v = sigmoid(np.dot(h, self.W.eval().T) + self.bvis.eval())
+        rnds = random_sample(mean_v.shape)
+        return (mean_v > rnds).astype(np.float32)
 
 
     def gibbs_hvh(self, h0):
@@ -200,31 +275,59 @@ class RBM(Auto):
 
 
     def sample_chain(self, inputs):
+        """
+        Start or resume (if self.persistent) Gibbs sampling.
 
+        Return sample at end of the chain.
+        """
+        
         if not self.persistent or self.chain_end is None:
             self.chain_end = [None, self.sample_h_given_v(inputs)]
-        
+        elif len(self.chain_end[1]) != len(inputs):
+            if self.verbose:
+                print('Resetting chain, with new no. of parallel chains: %d'
+                      % len(inputs))
+            self.chain_end = [None, self.sample_h_given_v(inputs)]
+
         for k in range(self.CDk):
             self.chain_end = list(self.gibbs_hvh(self.chain_end[1]))
-        
+
         return self.chain_end[0]
-        
-            
-    def cost(self, inputs):
+    
+
+    def cost(self, inputs, chain_sample):
         """
         Cost for given input batch of samples, under current params.
-        Mean cross entropy.
+        Using free energy and contrastive divergence.
         """
 
         return tf.reduce_mean(self.free_energy(inputs)) - \
-               tf.reduce_mean(self.free_energy(self.sample_chain(inputs)))
+               tf.reduce_mean(self.free_energy(chain_sample))
+
+
+    def train_feed(self, data):
+        """Return feed_dict based on data to be used for training."""
+
+        return {self.train_args[0]: data,
+                self.train_args[1]: self.sample_chain(data)}
+    
+            
+    def cost_args(self, data):
+        """Return args to self.cost() for given dataset."""
+
+        if not self.persistent or self.chain_end is None:
+            return [data, self.sample_chain(data)]
+
+        # use existing end of persistent chain
+        return [data, self.chain_end[0]]
+
 
 
 class RNN(Auto):
     """Recurrent neural network."""
 
     def __init__(self, n_visible=28, n_hidden=100, tie_Wxy=True,
-                 random_seed=123, fromfile=None, params=None,
+                 random_seed=123, fromfile=None, params=None, verbose=False,
                  Wxh=None, Whh=None, Why=None, bhid=None, bvis=None):
         """
         params is a list of Wxh, Whh, Why, bhid and bvis in order.
@@ -232,6 +335,7 @@ class RNN(Auto):
                      
         self.n_visible = n_visible
         self.n_hidden = n_hidden
+        self.verbose = verbose
 
         if fromfile is not None:
             save_file = open(fromfile)
@@ -275,17 +379,22 @@ class RNN(Auto):
         else:
             self.params = [self.Wxh, self.Whh, self.Why, self.bhid, self.bvis]
 
+        # To be used for training by tf.Optimizer objects.
+        self.train_args = [tf.placeholder(tf.float32,
+                                          shape=[None, 784])]
+
 
     def update(self, states, inputs):
         """
         Update states given old states and new inputs.
         Return new states and outputs corresponding to inputs.
         """
-        
-        states = tf.sigmoid(tf.matmul(inputs, self.Wxh) +
-                            tf.matmul(states, self.Whh) +
-                            self.bhid)
-        outputs = tf.sigmoid(tf.matmul(states, self.Why or tf.transpose(self.Wxh)) +
+
+        operand = tf.matmul(inputs, self.Wxh) + self.bhid
+        if states is not None: operand += tf.matmul(states, self.Whh)
+        states = tf.sigmoid(operand)
+        outputs = tf.sigmoid(tf.matmul(states,
+                                       self.Why or tf.transpose(self.Wxh)) +
                              self.bvis)
 
         return states, outputs
@@ -321,8 +430,7 @@ class RNN(Auto):
         
         outputs, states = \
            self.get_outputs(inputs[:, :sample_size-self.n_visible],
-                            tf.zeros([batch_size, self.n_hidden], dtype=tf.float32),
-                            [inputs[:, :self.n_visible]],
+                            None, [inputs[:, :self.n_visible]],
                             sample_size=sample_size-self.n_visible)
         return outputs
 
@@ -340,8 +448,7 @@ class RNN(Auto):
         batch_size, sample_size = inputs.get_shape().as_list()
         
         outputs, states = \
-           self.get_outputs(inputs,
-                            tf.zeros([batch_size, self.n_hidden], dtype=tf.float32),
+           self.get_outputs(inputs, None,
                             outputs=[inputs[:, :self.n_visible]],
                             sample_size=sample_size, as_list=True)
 
@@ -398,63 +505,3 @@ class RNN(Auto):
         
         return results.T, (2 * length + 1, row_len)
 
-
-class RNNRBM(RBM, RNN):
-    """Recurrent RBM neural network."""
-
-    def __init__(self, CDk=3, persistent=True, **kwargs):
-        """
-        CDk:
-        Number of Gibbs sampling steps to use for contrastive divergence
-        when computing cost.
-
-        persistent:
-        Set to True to use persistend CD.
-        """
-        
-        RNN.__init__(self, **kwargs)
-        self.CDk = CDk
-        self.persistent = persistent
-        self.chain_end = None
-
-
-    def get_hidden_values(self, v, presigmoid=False):
-        
-        batch_size, sample_size = v.get_shape().as_list()
-        side = self.n_visible
-        times = sample_size // side
-
-        h = []
-        for index in range(0, sample_size, side):
-            if len(h):
-                states = tf.sigmoid(h[-1]) if presigmoid else h[-1]
-            else: states = tf.zeros([batch_size, self.n_hidden], dtype=tf.float32)
-
-            arg = tf.matmul(v[:, index:index+side], self.Wxh) + \
-                  tf.matmul(states, self.Whh) + self.bhid
-            h.append(arg if presigmoid else tf.sigmoid(arg))
-
-        return tf.pack(h)
-
-
-    def get_reconstructed_input(self, hidden):
-
-        W = self.Why or tf.transpose(self.Wxh)
-        outputs = [tf.sigmoid(tf.matmul(h, W) + self.bvis)
-                   for h in tf.unpack(hidden)]
-        return tf.concat(1, outputs)
-
-
-    def free_energy(self, visible):
-
-        batch = visible.get_shape()[0].value
-        v = tf.reshape(visible, [batch, self.n_visible, -1])
-
-        vbias_term = [tf.reduce_sum(tf.matmul(vv, tf.expand_dims(self.bvis, 1)))
-                      for vv in tf.unpack(v)]
-
-        hidden = self.get_hidden_values(visible, presigmoid=True)
-        hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(hidden)),
-                                    reduction_indices=[0, 2])
-
-        return -hidden_term - tf.pack(vbias_term)
