@@ -9,6 +9,7 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 """
 from __future__ import division
+#from __future__ import print_function
 
 import numpy as np
 from numpy.random import randint
@@ -23,15 +24,13 @@ def corrupt(dataset, corruption):
     Fraction of dataset randomly set to mean value of the dataset.
     """
     
-    corrupted = dataset.copy()
-    if not corruption: return corrupted
+    corrupted = dataset.flatten()
+    size = corrupted.size
     
-    mean_val = np.mean(corrupted)
-    rows, cols = corrupted.shape
-    for i in range(rows):
-        corrupted[i][randint(cols, size=int(corruption * cols))] = mean_val
-
-    return corrupted
+    corrupted[randint(size,
+                      size=int(corruption * size))] = np.mean(corrupted)
+    
+    return corrupted.reshape(dataset.shape)
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
@@ -53,35 +52,22 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     data to the mean value of data, picking the locations randomly each epoch.
     """
 
-    n_visible = dataset.shape[-1]
-    n_train_batches = dataset.shape[0] // batch_size
-    x = tf.placeholder(tf.float32, shape=[batch_size, n_visible])
-
-    if corruption:
-        xc = tf.placeholder(tf.float32, shape=[batch_size, n_visible])
-        train_args = [xc, x]
-        valid_args = [corrupt(validation_set, corruption), validation_set]
-    else: train_args, valid_args = [x], [validation_set]
-    
     train_step = tf.train.AdagradOptimizer(learning_rate)\
-                     .minimize(coder.cost(*train_args))
+                     .minimize(coder.cost(*coder.train_args))
     sess.run(tf.initialize_all_variables())
 
-    if verbose:
-        print('Initial cost %.2f, r.m.s. loss %.3f' %
-              (coder.cost(*valid_args).eval(feed_dict={x: validation_set[:batch_size]}),
-               coder.rms_loss(validation_set).eval()))
+    if verbose: print('Initial cost %.2f, r.m.s. loss %.3f' %
+                      (coder.cost(*coder.cost_args(validation_set)).eval(),
+                       coder.rms_loss(validation_set).eval()))
     
+    n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
 
         for index in range(n_train_batches):
             batch = dataset[index * batch_size:(index + 1) * batch_size]
-            feed = {x: batch}
-            if corruption: feed[xc] = corrupt(batch, corruption)
-            train_step.run(feed_dict=feed)
+            train_step.run(feed_dict=coder.train_feed(batch))
 
-        if verbose:
-            print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
-                  (epoch,
-                   coder.cost(*valid_args).eval(feed_dict={x: validation_set[:batch_size]}),
-                   coder.rms_loss(validation_set).eval()))
+        if verbose: print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
+                          (epoch,
+                           coder.cost(*coder.cost_args(validation_set)).eval(),
+                           coder.rms_loss(validation_set).eval()))
