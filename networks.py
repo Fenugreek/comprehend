@@ -326,15 +326,18 @@ class RBM(Auto):
 class RNN(Auto):
     """Recurrent neural network."""
 
-    def __init__(self, n_visible=28, n_hidden=100, tie_Wxy=True,
+    def __init__(self, n_visible=28, n_hidden=100, seq_length=28, tie_Wxy=True,
                  random_seed=123, fromfile=None, params=None, verbose=False,
                  Wxh=None, Whh=None, Why=None, bhid=None, bvis=None):
         """
         params is a list of Wxh, Whh, Why, bhid and bvis in order.
+
+        seq_length is length of sequences used for training.
         """
                      
         self.n_visible = n_visible
         self.n_hidden = n_hidden
+        self.seq_length = seq_length
         self.verbose = verbose
 
         if fromfile is not None:
@@ -381,9 +384,14 @@ class RNN(Auto):
 
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(tf.float32,
-                                          shape=[None, 784])]
+                                          shape=[None, seq_length, n_visible])]
 
 
+    def prep_mnist(self, data):
+        """Reshape MNIST data from batch x pixels to batch x columns x rows."""
+        return data.reshape((-1, 28, 28)).swapaxes(1, 2)
+
+    
     def update(self, states, inputs):
         """
         Update states given old states and new inputs.
@@ -400,22 +408,22 @@ class RNN(Auto):
         return states, outputs
         
 
-    def get_outputs(self, inputs, states, outputs=[],
-                    sample_size=None, as_list=False):
+    def get_outputs(self, inputs, states, outputs=[], as_list=False):
         """
-        Computes the output values of the RNN for each of input, assuming
-        inputs is a batch. i.e. inputs is batch_size x (n_visible * seq_size).
+        Computes the output values of the RNN for each of input,
+        assuming inputs is a batch.
+        
+        i.e. inputs is batch_size x n_visible x seq_size.
+
+        Returns the outputs and final state.
         """
 
-        if sample_size is None:
-            sample_size = inputs.get_shape().as_list()[1]
-            
-        for index in range(0, sample_size, self.n_visible):
-            states, output = self.update(states,
-                                         inputs[:, index:index+self.n_visible])
+        for row in tf.unpack(tf.transpose(inputs, perm=[2, 0, 1])):
+            states, output = self.update(states, row)
             outputs.append(output)
 
-        if not as_list: outputs = tf.concat(1, outputs, name='outputs')
+        if not as_list:
+            outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
         return outputs, states
 
 
@@ -423,16 +431,9 @@ class RNN(Auto):
         """
         Wrapper around get_outputs() to fit recode() signature of parent class.
         """
-
-        if type(inputs) == np.ndarray:
-            inputs = tf.constant(inputs, dtype=tf.float32)
-        batch_size, sample_size = inputs.get_shape().as_list()
-        
         outputs, states = \
-           self.get_outputs(inputs[:, :sample_size-self.n_visible],
-                            None, [inputs[:, :self.n_visible]],
-                            sample_size=sample_size-self.n_visible)
-        return outputs
+           self.get_outputs(inputs, None, [inputs[:, :, 0]], as_list=True)
+        return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
 
 
     def extend(self, inputs, length, as_list=False):
@@ -442,21 +443,16 @@ class RNN(Auto):
 
         Return full output and ending state.
         """
-        
-        if type(inputs) == np.ndarray:
-            inputs = tf.constant(inputs, dtype=tf.float32)
-        batch_size, sample_size = inputs.get_shape().as_list()
-        
+
         outputs, states = \
-           self.get_outputs(inputs, None,
-                            outputs=[inputs[:, :self.n_visible]],
-                            sample_size=sample_size, as_list=True)
+           self.get_outputs(inputs, None, [inputs[:, :, 0]], as_list=True)
 
         for index in range(1, length):
             states, output = self.update(states, outputs[-1])
             outputs.append(output)
             
-        if not as_list: outputs = tf.concat(1, outputs, name='outputs')
+        if not as_list:
+            outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
         return outputs, states
 
 
@@ -471,7 +467,7 @@ class RNN(Auto):
         inputs = []
         for s in sample:
             ends = randint(length, row_len, times)
-            for e in ends: inputs.append(s[:e * row_len])
+            for e in ends: inputs.append(s.T[:e])
 
         Wxh = self.Wxh.eval()
         Whh = self.Whh.eval()
@@ -481,10 +477,8 @@ class RNN(Auto):
         states, outputs = [], []
         for sample in inputs:
             s = np.zeros((1, self.n_hidden), dtype=np.float32)
-            for index in range(0, len(sample), row_len):
-                s = sigmoid(\
-                    np.dot(sample[index : index + row_len], Wxh) +
-                    np.dot(s, Whh) + bhid)
+            for row in sample:
+                s = sigmoid(np.dot(row, Wxh) + np.dot(s, Whh) + bhid)
             states.append(s)
             
             o = [sigmoid(np.dot(s, Why) + bvis)]
@@ -494,7 +488,7 @@ class RNN(Auto):
             outputs.append(np.array(o).squeeze().flatten())
 
         weights = np.array(states).squeeze()**2
-        rows = np.array([i[-length * row_len:] for i in inputs])
+        rows = np.array([i[-length:].flatten() for i in inputs])
 
         prefix = np.dot(rows.T, weights) / np.sum(weights, axis=0)
         suffix = np.dot(np.array(outputs).T, weights) / np.sum(weights, axis=0)

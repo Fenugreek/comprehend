@@ -48,6 +48,9 @@ if __name__ == '__main__':
     global coder
     coder = getattr(networks, args.model)\
                (n_hidden=args.hidden, verbose=args.verbose, fromfile=args.params)
+    if hasattr(coder, 'prep_mnist'):
+        # massage data into shape liked by coder object.
+        dataset = coder.prep_mnist(dataset)
     
     sess = tf.Session()
     with sess.as_default():
@@ -57,7 +60,7 @@ if __name__ == '__main__':
                     verbose=args.verbose)
 
         if args.output is not None:
-            coder.save_params(args.output+'params_final.dat')
+            coder.save_params(args.output+'params.dat')
 
         if hasattr(coder, 'features'):
             results = coder.features(dataset[50000:51000])
@@ -66,7 +69,7 @@ if __name__ == '__main__':
             if args.output is None:
                 pyplot.imshow(tiles)
                 pyplot.show()
-            else: pyplot.imsave(args.output+'weights.png', tiles, origin='upper')
+            else: pyplot.imsave(args.output+'features.png', tiles, origin='upper')
     
     sess.close()
     

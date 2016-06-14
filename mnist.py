@@ -11,10 +11,11 @@ the Free Software Foundation, either version 3 of the License, or
 from __future__ import division
 
 import numpy as np
-from numpy.random import randint
+from numpy.random import randint, random
 from matplotlib import pyplot
 
 import tensorflow.examples.tutorials.mnist as mnist_data
+import train, features
 
 
 def get_sample(dataset=None, samples=10, start_idx=0):
@@ -25,7 +26,7 @@ def get_sample(dataset=None, samples=10, start_idx=0):
     Dataset defaults to the test dataset.
     """
     if dataset is None:
-        dataset = mnist_data .input_data.read_data_sets('MNIST_data').test
+        dataset = mnist_data.input_data.read_data_sets('MNIST_data').test
         
     X, Y = dataset.images, dataset.labels
     
@@ -69,9 +70,7 @@ def test_coder(coder, sample, corruption=.3, block_corruption=.2):
     size = len(sample[0])
     
     if corruption is not None:
-        corrupted = sample.copy()
-        for i in range(len(sample)):
-            corrupted[i][randint(size, size=int(corruption * size))] = 0
+        corrupted = train.corrupt(sample, corruption)
         results.append((corrupted, coder.recode(corrupted).eval()))
 
     if block_corruption is not None:
@@ -122,7 +121,7 @@ def block_corrupt(dataX, corruption_level=.1):
     """
     
     count = len(dataX)
-    size = len(dataX[0])
+    size = dataX[0].size
     length = int(np.sqrt(size))
     corrupt_area = corruption_level * size
 
@@ -136,13 +135,13 @@ def block_corrupt(dataX, corruption_level=.1):
     loc_y = randint(0, length, count)
 
     corruptX = np.zeros(dataX.shape, dtype=np.float32)
-    for i, row in enumerate(dataX):
+    for i, img in enumerate(dataX):
         bi, li = breadths[i], lengths[i]
         ind_x = np.arange(loc_x[i], loc_x[i] + bi, dtype=int) % length
         ind_y = np.arange(loc_y[i], loc_y[i] + li, dtype=int) % length
-        corrupted = row.copy().reshape((length, length))
+        corrupted = img.copy().reshape((length, length))
         corrupted[(np.tile(ind_x, li),
-                   np.repeat(ind_y, bi))] = random.random(bi * li)
-        corruptX[i] = corrupted.flatten()
+                   np.repeat(ind_y, bi))] = random(bi * li)
+        corruptX[i] = corrupted.reshape(img.shape)
 
     return corruptX
