@@ -1,15 +1,15 @@
-Artifical Neural Networks
+Unsupervised Learning with Artifical Neural Networks
 ===================
 
-Implementation of neural network architectures using the Google TensorFlow machine-learning library.
+Implementation of neural network architectures using the Google TensorFlow machine-learning library, primarily for unsupervised learning.
 
-Currently, autoencoders, denoising Autoencoders, RBMs, and RNNs are implemented, along with their training on MNIST. 
+Currently, autoencoders, denoising autoencoders, RBMs, and RNNs are implemented, along with their training on MNIST. 
 
 ### Notable modules:
 - **networks** : Implements the various NN architectures. 
 
 ### Test script:
-- **test.py** : Train the network specified on MNIST data, (optionally) saving params learnt to disk. Also optionally displays features learnt, and image reconstruction output.
+- **test.py** : Train the network specified on MNIST data, (optionally) saving params learnt to disk. (Optionally) display features learnt, and results of reconstruction on corrupted input.
 
 Installation
 ------------
@@ -19,7 +19,7 @@ From the directory where you downloaded the files, run the following command-lin
  $ python setup.py install
 ```
 
-Or simply place all files into a directory called `tamarind/` somewhere in your `$PYTHONPATH`.
+Or simply place all files into a directory called `comprehend/` somewhere in your `$PYTHONPATH`.
 
 **Dependencies** : TensorFlow and its dependencies, matplotlib, Fenugreek/tamarind, and dmishin/tsp-solver.
 
@@ -38,15 +38,16 @@ params learnt to disk.
 
 optional arguments:
   -h, --help            show this help message and exit
-  --model <model>       TensorFlow code to run. e.g. auto
+  --model <model>       network architecture to load from networks module.
+                        Auto, Denoising, RBM or RNN.
   --params <filename.dat>
                         previous params_final.dat file to load from and resume
                         training.
   --data <filename.dat>
                         data file to use for training. Default: MNIST
   --output <path/prefix>
-                        output params and figure to
-                        <path/prefix>params_init.dat, etc.
+                        output params and figures to
+                        <path/prefix>{params,features,mosaic}.dat.
   --learning_rate R     learning rate for gradient descent algorithm
   --batch N             size of each mini-batch
   --hidden N            number of hidden units
@@ -55,7 +56,8 @@ optional arguments:
                         results.
   --use_tsp             Use Traveling Salesman Problem solver when arranging
                         features for display (takes time).
-  --mosaic              test learnt model on sample.
+  --mosaic              Display learnt model's reconstruction of corrupted
+                        input.
   --verbose             print progress
 ```
 

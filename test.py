@@ -33,7 +33,7 @@ if __name__ == '__main__':
                        help='Seed random number generator with this, for repeatable results.')
     parser.add_argument('--use_tsp', action='store_true',
                         help='Use Traveling Salesman Problem solver when arranging features for display (takes time).')
-    parser.add_argument('--mosaic', action='store_true', help='test learnt model on sample.')
+    parser.add_argument('--mosaic', action='store_true', help="Display learnt model's reconstruction of corrupted input.")
     parser.add_argument('--verbose', action='store_true', help='print progress')
     args = parser.parse_args()
 
