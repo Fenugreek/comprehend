@@ -61,8 +61,24 @@ optional arguments:
   --verbose             print progress
 ```
 
-Sample command-line:
+Sample command-line and output:
 
 ```
-$ python source/test.py --model RBM --epochs 8 --learning_rate 0.05 --verbose --hidden 500 --batch 40 --mosaic
+$ python test.py --model RBM --epochs 8 --learning_rate 0.05 --verbose --hidden 500 --batch 40 --mosaic
+
+Initial cost 758.88, r.m.s. loss 0.565
+Resetting chain, with new no. of parallel chains: 40
+Training epoch 0, cost -18.81, r.m.s. loss 0.107 
+Training epoch 1, cost -7.77, r.m.s. loss 0.097 
+Training epoch 2, cost -8.31, r.m.s. loss 0.094 
+Training epoch 3, cost -5.25, r.m.s. loss 0.092 
+Training epoch 4, cost 0.59, r.m.s. loss 0.089 
+Training epoch 5, cost -0.40, r.m.s. loss 0.089 
+Training epoch 6, cost -2.03, r.m.s. loss 0.087 
+Training epoch 7, cost 2.29, r.m.s. loss 0.086 
 ```
+
+This will also produce the following images as output:
+
+![Visualization of features learnt](http://www.subburam.org/files/features.png "Heatmap of node weights")
+![MNIST image reconstruction test output](http://www.subburam.org/files/mosaic.png "Input (top half) output (bottom half) test")
