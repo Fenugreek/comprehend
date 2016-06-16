@@ -305,6 +305,43 @@ class RBM(Auto):
                tf.reduce_mean(self.free_energy(chain_sample))
 
 
+    def get_samples(self, initial, count=1, burn=1000, step=100):
+        """
+        Get Gibbs samples from the RBM, as a list with <count> elements.
+
+        initial:
+        Seed chain with this input sample, which could be a batch.
+
+        count:
+        No. of samples to return. If <initial> is a batch,
+        batch number of samples are returned for every <count>.
+
+
+        burn:
+        Burn these many entries from the start of the Gibbs chain.
+
+        step:
+        After the first sample, take these many Gibbs steps between
+        subsequent samples to be returned.
+        """
+        
+        if count < 1: return []
+        W = self.W.eval().T
+        bvis = self.bvis.eval()
+        
+        chain_end = [None, self.sample_h_given_v(initial)]
+        for i in range(burn):
+            chain_end = self.gibbs_hvh(chain_end[1])
+            
+        results = [sigmoid(np.dot(chain_end[1], W) + bvis)]
+        for i in range(count - 1):
+            for j in range(step):
+                chain_end = self.gibbs_hvh(self.chain_end[1])
+            results.append(sigmoid(np.dot(chain_end[1], W) + bvis))
+
+        return results
+
+
     def train_feed(self, data):
         """Return feed_dict based on data to be used for training."""
 
