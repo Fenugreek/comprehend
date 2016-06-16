@@ -89,7 +89,8 @@ def mosaic(results, show=True):
     If True, plot the image.
     """
     
-    divider = np.zeros((3, 307), dtype=np.float32)
+    data_type = results[0][0].dtype
+    divider = np.zeros((3, 307), dtype=data_type)
     divider[1, :] = 1.0
     vtiles = []
     for result in results:
@@ -99,7 +100,7 @@ def mosaic(results, show=True):
             vtiles[-1].append(features.tile(r, spacing=(3,3), bytes=False))
 
     mosaic = [np.concatenate(vtiles[0])]
-    divider = np.zeros((len(mosaic[0]), 3), dtype=np.float32)
+    divider = np.zeros((len(mosaic[0]), 3), dtype=data_type)
     divider[:, 1] = 1.0
     for tiles in vtiles[1:]:
         mosaic.append(divider)
@@ -134,7 +135,7 @@ def block_corrupt(dataX, corruption_level=.1):
     loc_x = randint(0, length, count)
     loc_y = randint(0, length, count)
 
-    corruptX = np.zeros(dataX.shape, dtype=np.float32)
+    corruptX = np.zeros(dataX.shape, dtype=dataX.dtype)
     for i, img in enumerate(dataX):
         bi, li = breadths[i], lengths[i]
         ind_x = np.arange(loc_x[i], loc_x[i] + bi, dtype=int) % length
