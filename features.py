@@ -15,7 +15,7 @@ from tamarind.functions import unit_scale
 from tamarind import integers
 
 
-def corrsort(features, use_tsp=True):
+def corrsort(features, use_tsp=False):
     """
     Given a 2D array, one row per feature, return row indices such that
     adjacent indices correspond to features that are correlated.
@@ -24,7 +24,9 @@ def corrsort(features, use_tsp=True):
 
     use_tsp:
     Use tsp solver. See tsp_solver.greedy module that is used for this.
-    Slows run-time considerably.
+    Slows run-time considerably: O(N^4) computation, O(N^2) memory.
+
+    Without use_tsp, both computation and memory are O(N^2).
     """
     
     correlations = np.ma.corrcoef(features)
@@ -33,9 +35,9 @@ def corrsort(features, use_tsp=True):
     size = features.shape[0]    
     correlations.mask[np.diag_indices(size)] = True
     
-    results = []
+    # initialize results with the pair with the highest correlations.
     largest = np.argmax(correlations)
-    results.extend([int(largest / size), largest % size])
+    results = [int(largest / size), largest % size]
     correlations.mask[:, results[0]] = True
 
     while len(results) < size:
