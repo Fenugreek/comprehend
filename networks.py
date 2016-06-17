@@ -615,11 +615,11 @@ class RNNRBM(RNN, RBM):
             operand = np.dot(v[:, :, row], Wxh) + bhid
             if states is not None: operand += np.dot(states, Whh)
             states = sigmoid(operand)
-            hidden.append(operand.T)
+            hidden.append(states.T)
 
         mean_h = np.array(hidden).swapaxes(0, 2)
         rnds = random_sample(mean_h.shape)
-        return (mean_h > rnds).astype(np.float32)
+        return (mean_h > rnds).astype(dtype)
 
 
     def sample_v_given_h(self, h):
@@ -627,7 +627,7 @@ class RNNRBM(RNN, RBM):
 
         mean_v = self.get_reconstructed_input(h)        
         rnds = random_sample(mean_v.shape)
-        return (mean_v > rnds).astype(np.float32)
+        return (mean_v > rnds).astype(h.dtype)
 
 
     def free_energy(self, visible):
