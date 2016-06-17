@@ -204,7 +204,7 @@ class Denoising(Auto):
 class RBM(Auto):
     """Restricted Boltzmann Machine. Adapted from deeplearning.net."""
 
-    def __init__(self, CDk=1, persistent=True, **kwargs):
+    def __init__(self, CDk=1, persistent=False, **kwargs):
         """
         CDk:
         Number of Gibbs sampling steps to use for contrastive divergence
@@ -336,7 +336,7 @@ class RBM(Auto):
         results = [sigmoid(np.dot(chain_end[1], W) + bvis)]
         for i in range(count - 1):
             for j in range(step):
-                chain_end = self.gibbs_hvh(self.chain_end[1])
+                chain_end = self.gibbs_hvh(chain_end[1])
             results.append(sigmoid(np.dot(chain_end[1], W) + bvis))
 
         return results
@@ -414,6 +414,7 @@ class RNN(Auto):
         self.Why = Why
         self.bhid = bhid
         self.bvis = bvis
+        self.tie_Wxy = tie_Wxy
         if tie_Wxy:
             self.params = [self.Wxh, self.Whh, self.bhid, self.bvis]
         else:
@@ -421,7 +422,7 @@ class RNN(Auto):
 
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(tf.float32,
-                                          shape=[None, seq_length, n_visible])]
+                                          shape=[None, n_visible, seq_length])]
 
 
     def prep_mnist(self, data):
@@ -471,6 +472,39 @@ class RNN(Auto):
         outputs, states = \
            self.get_outputs(inputs, None, [inputs[:, :, 0]], as_list=True)
         return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
+
+
+    def get_hidden_values(self, visible, states=None, presigmoid=False):
+        """
+        Given visible unit values, return expected hidden unit values.
+        """
+
+        hidden = []
+        for row in tf.unpack(tf.transpose(visible, perm=[2, 0, 1])):
+            operand = tf.matmul(row, self.Wxh) + self.bhid
+            if states is not None: operand += tf.matmul(states, self.Whh)
+            hidden.append(operand if presigmoid else tf.sigmoid(operand))
+            states = tf.sigmoid(operand) if presigmoid else hidden[-1]
+            
+        return tf.transpose(tf.pack(hidden), perm=[1, 2, 0])
+
+
+    def get_reconstructed_input(self, hidden):
+        """
+        Note: implemented in numpy for efficiency.
+              Do not use in computation graph.
+
+        Given hidden unit values, return expected visible unit values.
+        """
+
+        Why = self.Why.eval() if self.Why else self.Wxh.eval().T
+        bvis = self.bvis.eval()
+
+        visible = []
+        for row in range(hidden.shape[2]):
+            visible.append(sigmoid(np.dot(hidden[:, :, row], Why) + bvis).T)
+
+        return np.array(visible).swapaxes(0, 2)
 
 
     def extend(self, inputs, length, as_list=False):
@@ -535,4 +569,111 @@ class RNN(Auto):
         results[len(prefix):len(prefix) + row_len] = unit_scale(Why.T, axis=0)
         
         return results.T, (2 * length + 1, row_len)
+
+
+class RNNRBM(RNN, RBM):
+    """Recurrent RBM neural network."""
+
+    def __init__(self, CDk=1, persistent=False, **kwargs):
+        """
+        CDk:
+        Number of Gibbs sampling steps to use for contrastive divergence
+        when computing cost.
+
+        persistent:
+        Set to True to use persistend CD.
+        """
+
+        RNN.__init__(self, **kwargs)
+        assert self.tie_Wxy
+        self.CDk = CDk
+        self.persistent = persistent
+        self.chain_end = None
+        self.train_args.append(tf.placeholder(tf.float32,
+                                              shape=[None, self.n_visible, self.seq_length]))
+
+
+    def sample_h_given_v(self, v, stationary=True):
+        """
+        Given visible unit values, sample hidden unit values.
+
+        stationary:
+        if True (default), don't process last row of v, and insert a row
+        of 0s at the beginning of the output. So when the output is reversed,
+        we don't get a forward movement.
+        """
+
+        Wxh = self.Wxh.eval()
+        bhid = self.bhid.eval()
+        Whh = self.Whh.eval()
+        dtype = bhid.dtype
+        
+        hidden = [np.zeros((len(bhid), len(v)), dtype=dtype)] \
+                 if stationary else []
+        states = None
+        for row in range(v.shape[2] - stationary):
+            operand = np.dot(v[:, :, row], Wxh) + bhid
+            if states is not None: operand += np.dot(states, Whh)
+            states = sigmoid(operand)
+            hidden.append(operand.T)
+
+        mean_h = np.array(hidden).swapaxes(0, 2)
+        rnds = random_sample(mean_h.shape)
+        return (mean_h > rnds).astype(np.float32)
+
+
+    def sample_v_given_h(self, h):
+        """Given hidden unit values, sample visible unit values."""
+
+        mean_v = self.get_reconstructed_input(h)        
+        rnds = random_sample(mean_v.shape)
+        return (mean_v > rnds).astype(np.float32)
+
+
+    def free_energy(self, visible):
+
+        vbias_term = [tf.matmul(row, tf.expand_dims(self.bvis, 1))
+                      for row in tf.unpack(tf.transpose(visible, perm=[2, 0, 1]))]
+
+        hidden = self.get_hidden_values(visible, presigmoid=True)
+        hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(hidden)),
+                                    reduction_indices=[1, 2])
+
+        return -hidden_term - tf.reduce_sum(tf.pack(vbias_term),
+                                            reduction_indices=[0])
+
+
+    def get_samples(self, initial, count=1, burn=1000, step=100):
+        """
+        Get Gibbs samples from the RBM, as a list with <count> elements.
+
+        initial:
+        Seed chain with this input sample, which could be a batch.
+
+        count:
+        No. of samples to return. If <initial> is a batch,
+        batch number of samples are returned for every <count>.
+
+
+        burn:
+        Burn these many entries from the start of the Gibbs chain.
+
+        step:
+        After the first sample, take these many Gibbs steps between
+        subsequent samples to be returned.
+        """
+        
+        if count < 1: return []
+        
+        chain_end = [None, self.sample_h_given_v(initial)]
+        for i in range(burn):
+            chain_end = self.gibbs_hvh(chain_end[1])
+            
+        results = [self.get_reconstructed_input(chain_end[1])]
+        for i in range(count - 1):
+            for j in range(step):
+                chain_end = self.gibbs_hvh(chain_end[1])
+            results.append(self.get_reconstructed_input(chain_end[1]))
+
+        return results
 
