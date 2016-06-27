@@ -305,6 +305,18 @@ class RBM(Auto):
                tf.reduce_mean(self.free_energy(chain_sample))
 
 
+    def np_reconstructed_input(self, hidden):
+        """
+        Note: implemented in numpy for efficiency.
+              Do not use in computation graph.
+
+        Given hidden unit values, return expected visible unit values.
+        """
+        W = self.W.eval().T
+        bvis = self.bvis.eval()
+        return sigmoid(np.dot(hidden, W) + bvis)
+
+
     def get_samples(self, initial, count=1, burn=1000, step=100):
         """
         Get Gibbs samples from the RBM, as a list with <count> elements.
@@ -326,18 +338,16 @@ class RBM(Auto):
         """
         
         if count < 1: return []
-        W = self.W.eval().T
-        bvis = self.bvis.eval()
         
         chain_end = [None, self.sample_h_given_v(initial)]
         for i in range(burn):
             chain_end = self.gibbs_hvh(chain_end[1])
             
-        results = [sigmoid(np.dot(chain_end[1], W) + bvis)]
+        results = [self.np_reconstructed_input(chain_end[1])]
         for i in range(count - 1):
             for j in range(step):
                 chain_end = self.gibbs_hvh(chain_end[1])
-            results.append(sigmoid(np.dot(chain_end[1], W) + bvis))
+            results.append(self.np_reconstructed_input(chain_end[1]))
 
         return results
 
@@ -489,7 +499,7 @@ class RNN(Auto):
         return tf.transpose(tf.pack(hidden), perm=[1, 2, 0])
 
 
-    def get_reconstructed_input(self, hidden):
+    def np_reconstructed_input(self, hidden, stationary=True):
         """
         Note: implemented in numpy for efficiency.
               Do not use in computation graph.
@@ -500,8 +510,9 @@ class RNN(Auto):
         Why = self.Why.eval() if self.Why else self.Wxh.eval().T
         bvis = self.bvis.eval()
 
-        visible = []
-        for row in range(hidden.shape[2]):
+        visible = [np.zeros((len(bvis), len(hidden)), dtype=bvis.dtype)] \
+                  if stationary else []
+        for row in range(stationary, hidden.shape[2]):
             visible.append(sigmoid(np.dot(hidden[:, :, row], Why) + bvis).T)
 
         return np.array(visible).swapaxes(0, 2)
@@ -614,18 +625,17 @@ class RNNRBM(RNN, RBM):
         for row in range(v.shape[2] - stationary):
             operand = np.dot(v[:, :, row], Wxh) + bhid
             if states is not None: operand += np.dot(states, Whh)
-            states = sigmoid(operand)
+            rnds = random_sample(operand.shape)
+            states = (sigmoid(operand) > rnds).astype(dtype)
             hidden.append(states.T)
 
-        mean_h = np.array(hidden).swapaxes(0, 2)
-        rnds = random_sample(mean_h.shape)
-        return (mean_h > rnds).astype(dtype)
+        return np.array(hidden).swapaxes(0, 2)
 
 
-    def sample_v_given_h(self, h):
+    def sample_v_given_h(self, h, stationary=True):
         """Given hidden unit values, sample visible unit values."""
 
-        mean_v = self.get_reconstructed_input(h)        
+        mean_v = self.np_reconstructed_input(h, stationary=stationary)
         rnds = random_sample(mean_v.shape)
         return (mean_v > rnds).astype(h.dtype)
 
@@ -641,39 +651,3 @@ class RNNRBM(RNN, RBM):
 
         return -hidden_term - tf.reduce_sum(tf.pack(vbias_term),
                                             reduction_indices=[0])
-
-
-    def get_samples(self, initial, count=1, burn=1000, step=100):
-        """
-        Get Gibbs samples from the RBM, as a list with <count> elements.
-
-        initial:
-        Seed chain with this input sample, which could be a batch.
-
-        count:
-        No. of samples to return. If <initial> is a batch,
-        batch number of samples are returned for every <count>.
-
-
-        burn:
-        Burn these many entries from the start of the Gibbs chain.
-
-        step:
-        After the first sample, take these many Gibbs steps between
-        subsequent samples to be returned.
-        """
-        
-        if count < 1: return []
-        
-        chain_end = [None, self.sample_h_given_v(initial)]
-        for i in range(burn):
-            chain_end = self.gibbs_hvh(chain_end[1])
-            
-        results = [self.get_reconstructed_input(chain_end[1])]
-        for i in range(count - 1):
-            for j in range(step):
-                chain_end = self.gibbs_hvh(chain_end[1])
-            results.append(self.get_reconstructed_input(chain_end[1]))
-
-        return results
-
