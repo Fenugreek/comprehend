@@ -301,8 +301,8 @@ class RBM(Auto):
         Using free energy and contrastive divergence.
         """
 
-        return tf.reduce_mean(self.free_energy(inputs)) - \
-               tf.reduce_mean(self.free_energy(chain_sample))
+        return tf.reduce_mean(self.free_energy(inputs) - 
+                              self.free_energy(chain_sample))
 
 
     def np_reconstructed_input(self, hidden):
@@ -387,18 +387,20 @@ class RNN(Auto):
         self.seq_length = seq_length
         self.verbose = verbose
 
+        Why = None
         if fromfile is not None:
             save_file = open(fromfile)
             Wxh = tf.Variable(cPickle.load(save_file), name='Wxh')
             Whh = tf.Variable(cPickle.load(save_file), name='Whh')
-            if tie_Wxy: Why = None
-            else: Why = tf.Variable(cPickle.load(save_file), name='Why')
+            if not tie_Wxy:
+                Why = tf.Variable(cPickle.load(save_file), name='Why')
             bhid = tf.Variable(cPickle.load(save_file), name='bhid')
             bvis = tf.Variable(cPickle.load(save_file), name='bvis')
             save_file.close()
 
         elif params is not None:
-            Wxh, Whh, Why, bhid, bvis = params
+            if tie_Wxy: Wxh, Whh, bhid, bvis = params
+            else: Wxh, Whh, Why, bhid, bvis = params
 
         else:
             # Uniformly sample from +/-4*sqrt(6./(n_visible+n_hidden)).
@@ -407,15 +409,14 @@ class RNN(Auto):
             Wxh = tf.Variable(tf.random_uniform([n_visible, n_hidden],
                                                 minval=-Winit_max, maxval=Winit_max,
                                                 dtype=tf.float32), name='Wxh')
-            if tie_Wxy: Why = None
-            else:
+            if not tie_Wxy:
                 Why = tf.Variable(tf.random_uniform([n_hidden, n_visible],
                                                     minval=-Winit_max, maxval=Winit_max,
                                                     dtype=tf.float32), name='Wxh')
             Winit_max = 4 * np.sqrt(3. / n_hidden)
             Whh = tf.Variable(tf.random_uniform([n_hidden, n_hidden],
                                                 minval=-Winit_max, maxval=Winit_max,
-                                                dtype=tf.float32), name='Wxh')
+                                                dtype=tf.float32), name='Whh')
             bvis = tf.Variable(tf.zeros([n_visible]), name='bvis')
             bhid = tf.Variable(tf.zeros([n_hidden]), name='bhid')
 
@@ -499,25 +500,6 @@ class RNN(Auto):
         return tf.transpose(tf.pack(hidden), perm=[1, 2, 0])
 
 
-    def np_reconstructed_input(self, hidden, stationary=True):
-        """
-        Note: implemented in numpy for efficiency.
-              Do not use in computation graph.
-
-        Given hidden unit values, return expected visible unit values.
-        """
-
-        Why = self.Why.eval() if self.Why else self.Wxh.eval().T
-        bvis = self.bvis.eval()
-
-        visible = [np.zeros((len(bvis), len(hidden)), dtype=bvis.dtype)] \
-                  if stationary else []
-        for row in range(stationary, hidden.shape[2]):
-            visible.append(sigmoid(np.dot(hidden[:, :, row], Why) + bvis).T)
-
-        return np.array(visible).swapaxes(0, 2)
-
-
     def extend(self, inputs, length, as_list=False):
         """
         Given initial sequence of inputs, extend by given length, feeding
@@ -582,8 +564,8 @@ class RNN(Auto):
         return results.T, (2 * length + 1, row_len)
 
 
-class RNNRBM(RNN, RBM):
-    """Recurrent RBM neural network."""
+class RRBM(RBM, RNN):
+    """Recurrent RBM."""
 
     def __init__(self, CDk=1, persistent=False, **kwargs):
         """
@@ -604,14 +586,9 @@ class RNNRBM(RNN, RBM):
                                               shape=[None, self.n_visible, self.seq_length]))
 
 
-    def sample_h_given_v(self, v, stationary=True):
+    def sample_h_given_v(self, v):
         """
         Given visible unit values, sample hidden unit values.
-
-        stationary:
-        if True (default), don't process last row of v, and insert a row
-        of 0s at the beginning of the output. So when the output is reversed,
-        we don't get a forward movement.
         """
 
         Wxh = self.Wxh.eval()
@@ -619,30 +596,47 @@ class RNNRBM(RNN, RBM):
         Whh = self.Whh.eval()
         dtype = bhid.dtype
         
-        hidden = [np.zeros((len(bhid), len(v)), dtype=dtype)] \
-                 if stationary else []
+        hidden = []
         states = None
-        for row in range(v.shape[2] - stationary):
+        for row in range(v.shape[2]):
             operand = np.dot(v[:, :, row], Wxh) + bhid
             if states is not None: operand += np.dot(states, Whh)
-            rnds = random_sample(operand.shape)
-            states = (sigmoid(operand) > rnds).astype(dtype)
-            hidden.append(states.T)
+            states = sigmoid(operand)
+            rnds = random_sample(states.shape)
+            hidden.append((states > rnds).astype(dtype).T)
 
         return np.array(hidden).swapaxes(0, 2)
 
 
-    def sample_v_given_h(self, h, stationary=True):
+    def np_reconstructed_input(self, hidden):
+        """
+        Note: implemented in numpy for efficiency.
+              Do not use in computation graph.
+
+        Given hidden unit values, return expected visible unit values.
+        """
+
+        Why = self.Why.eval() if self.Why else self.Wxh.eval().T
+        bvis = self.bvis.eval()
+
+        visible = []
+        for row in range(hidden.shape[2]):
+            visible.append(sigmoid(np.dot(hidden[:, :, row], Why) + bvis).T)
+
+        return np.array(visible).swapaxes(0, 2)
+
+
+    def sample_v_given_h(self, h):
         """Given hidden unit values, sample visible unit values."""
 
-        mean_v = self.np_reconstructed_input(h, stationary=stationary)
+        mean_v = self.np_reconstructed_input(h)
         rnds = random_sample(mean_v.shape)
         return (mean_v > rnds).astype(h.dtype)
 
 
     def free_energy(self, visible):
 
-        vbias_term = [tf.matmul(row, tf.expand_dims(self.bvis, 1))
+        vbias_term = [tf.squeeze(tf.matmul(row, tf.expand_dims(self.bvis, 1)))
                       for row in tf.unpack(tf.transpose(visible, perm=[2, 0, 1]))]
 
         hidden = self.get_hidden_values(visible, presigmoid=True)
