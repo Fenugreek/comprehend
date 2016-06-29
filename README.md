@@ -39,7 +39,7 @@ params learnt to disk.
 optional arguments:
   -h, --help            show this help message and exit
   --model <model>       network architecture to load from networks module.
-                        Auto, Denoising, RBM or RNN.
+                        Auto, Denoising, RBM, RNN or VAE.
   --params <filename.dat>
                         previous params_final.dat file to load from and resume
                         training.
