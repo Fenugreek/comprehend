@@ -14,7 +14,7 @@ import networks, train, features, mnist
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', metavar='<model>',
-                       help='network architecture to load from networks module. Auto, Denoising, RBM or RNN.')
+                       help='network architecture to load from networks module. Auto, Denoising, RBM, RNN, or VAE.')
     parser.add_argument('--params', metavar='<filename.dat>',
                        help='previous params_final.dat file to load from and resume training.')
     parser.add_argument('--data', metavar='<filename.dat>',
