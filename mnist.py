@@ -80,7 +80,7 @@ def test_coder(coder, sample, corruption=.3, block_corruption=.2):
     return results
     
 
-def mosaic(results, show=True):
+def mosaic(results, show=True, transpose=False):
     """
     Convert output of test_coder() into a 2D image suitable for display.
     Returns the associated 2D array.
@@ -88,6 +88,8 @@ def mosaic(results, show=True):
     show:
     If True, plot the image.
     """
+
+    if transpose: results = np.array(results).swapaxes(0, 1)
     
     data_type = results[0][0].dtype
     divider = np.zeros((3, 307), dtype=data_type)
