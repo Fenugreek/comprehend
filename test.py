@@ -21,7 +21,7 @@ if __name__ == '__main__':
                        help='data file to use for training. Default: MNIST')
     parser.add_argument('--output', metavar='<path/prefix>',
                        help='output params and figures to <path/prefix>{params,features,mosaic}.dat.')
-    parser.add_argument('--learning_rate', metavar='R', type=float, default=0.01,
+    parser.add_argument('--learning_rate', metavar='R', type=float, default=0.001,
                        help='learning rate for gradient descent algorithm')
     parser.add_argument('--batch', metavar='N', type=int, default=100,
                        help='size of each mini-batch')

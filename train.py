@@ -34,7 +34,7 @@ def corrupt(dataset, corruption):
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
-          training_epochs=10, learning_rate=0.01, batch_size=100,
+          training_epochs=10, learning_rate=0.001, batch_size=100,
           corruption=None, **kwargs):
     """
     Train a networks object on given data.
@@ -52,7 +52,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     data to the mean value of data, picking the locations randomly each epoch.
     """
 
-    train_step = tf.train.AdagradOptimizer(learning_rate)\
+    train_step = tf.train.AdamOptimizer(learning_rate)\
                      .minimize(coder.cost(*coder.train_args))
     sess.run(tf.initialize_all_variables())
 
