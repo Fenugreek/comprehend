@@ -11,17 +11,30 @@ the Free Software Foundation, either version 3 of the License, or
 from __future__ import print_function
 import tensorflow as tf
 import numpy as np
-from numpy.random import randint, random_sample
+from numpy.random import randint, random_sample, randn
 import cPickle
+from collections import OrderedDict
 
 import functions, train
 from tamarind.functions import sigmoid, unit_scale
+from scipy.stats import multivariate_normal
 
-class Auto(object):
-    """Auto-Encoder. Adapted from deeplearning.net."""
+def xavier_init(fan_in, fan_out, name='W', constant=4): 
+    """ Xavier initialization of network weights"""
+    # https://stackoverflow.com/questions/33640581/how-to-do-xavier-initialization-on-tensorflow
+    bound = constant*np.sqrt(6.0/(fan_in + fan_out))
+    return tf.Variable(tf.random_uniform((fan_in, fan_out),
+                                         minval=-bound, maxval=bound, 
+                                         dtype=tf.float32, name=name))
+
+
+class Coder(object):
+    """Virtual NN with skeleton implementation of common functions."""
+
+    param_names = []
 
     def __init__(self, n_visible=784, n_hidden=500, verbose=False,
-                 random_seed=123, fromfile=None, W=None, bhid=None, bvis=None):
+                 random_seed=123, params=None, fromfile=None, **kwargs):
         """
         Initialize the object by specifying the number of visible units (the
         dimension d of the input), the number of hidden units (the dimension
@@ -42,50 +55,33 @@ class Auto(object):
 
         :type fromfile: str
         :param fromfile:  initialize params from this saved file
-
-        :type W: tf.Variable
-        :param W: TensorFlow variable pointing to a set of weights that should be
-                  shared between this object and another architecture;
-                  if object is standalone set to None.
-
-        :type bhid: tf.Variable
-        :param bhid: TensorFlow variable pointing to a set of biases values (for
-                     hidden units) that should be shared betweeen this object and
-                     another architecture; if object is standalone set to None.
-
-        :type bvis: tf.Variable
-        :param bvis: TensorFlow variable pointing to a set of biases values (for
-                     visible units) that should be shared betweeen this object
-                     and another architecture; if obj is standalone set to None.
         """
         
         self.n_visible = n_visible
         self.n_hidden = n_hidden
         self.verbose = verbose
+        if random_seed is not None: tf.set_random_seed(random_seed)
 
-        if fromfile is not None:
-            save_file = open(fromfile)
-            W = tf.Variable(cPickle.load(save_file), name='W')
-            bhid = tf.Variable(cPickle.load(save_file), name='bhid')
-            bvis = tf.Variable(cPickle.load(save_file), name='bvis')
-            save_file.close()
+        if params is not None:
+            self.params = params
+        else: 
+            self.params = OrderedDict()
+            if fromfile is not None:
+                save_file = open(fromfile)
+                for name in type(self).param_names:
+                    self.params[name] = tf.Variable(cPickle.load(save_file),
+                                                    name=name)
+                save_file.close()
+            else:
+                self.init_params(**kwargs)
             
-        if not W:
-            # Uniformly sample from +/-4*sqrt(6./(n_visible+n_hidden)).
-            if random_seed is not None: tf.set_random_seed(random_seed)
-            Winit_max = 4 * np.sqrt(6. / (n_hidden + n_visible))
-            W = tf.Variable(tf.random_uniform([n_visible, n_hidden],
-                                              minval=-Winit_max, maxval=Winit_max,
-                                              dtype=tf.float32), name='W')
+        self.init_train_args(**kwargs)
 
-        if not bvis: bvis = tf.Variable(tf.zeros([n_visible]), name='bvis')
-        if not bhid: bhid = tf.Variable(tf.zeros([n_hidden]), name='bhid')
+        
+    def init_params(self, **kwargs):
+        pass
 
-        self.W = W
-        self.bhid = bhid
-        self.bvis = bvis
-        self.params = [self.W, self.bhid, self.bvis]
-
+    def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(tf.float32,
                                           shape=[None, self.n_visible])]
@@ -96,23 +92,32 @@ class Auto(object):
         Save params to disk, compatible with fromfile option of constructor.
         """
         save_file = open(filename, 'wb')
-        for variable in self.params:
+        for variable in self.params.values():
             cPickle.dump(variable.eval(), save_file, -1) 
         save_file.close()    
         
-        
+
+    def cost_args(self, dataset):
+        """Return args to self.cost() for given dataset."""
+        return [dataset]
+
+
+    def train_feed(self, data):
+        """Return feed_dict based on data to be used for training."""
+        return {self.train_args[0]: data}
+
+
     def get_hidden_values(self, inputs):
         """Computes the values of the hidden layer."""
-        return tf.sigmoid(tf.matmul(inputs, self.W) + self.bhid)
-
-
+        return None #implement in subclass
+    
+        
     def get_reconstructed_input(self, hidden):
         """
         Computes the reconstructed input given the values of the
         hidden layer.
         """
-        return tf.sigmoid(tf.matmul(hidden, self.W, transpose_b=True) +
-                          self.bvis)
+        return None #implement in subclass
 
 
     def recode(self, inputs):
@@ -138,19 +143,54 @@ class Auto(object):
         return tf.reduce_mean(tf.reduce_mean(loss, reduction_indices=[1]) ** .5)
         
 
+class Auto(Coder):
+    """
+    Auto-Encoder. Adapted from deeplearning.net.
+
+    :type W: tf.Variable
+    :param W: TensorFlow variable pointing to a set of weights that should be
+              shared between this object and another architecture;
+              if object is standalone set to None.
+
+    :type bhid: tf.Variable
+    :param bhid: TensorFlow variable pointing to a set of biases values (for
+                 hidden units) that should be shared betweeen this object and
+                 another architecture; if object is standalone set to None.
+
+    :type bvis: tf.Variable
+    :param bvis: TensorFlow variable pointing to a set of biases values (for
+                 visible units) that should be shared betweeen this object
+                 and another architecture; if obj is standalone set to None.
+    """
+
+    param_names = ['W', 'bhid', 'bvis']
+
+
+    def init_params(self):
+
+        self.params['W'] = xavier_init(self.n_visible, self.n_hidden, name='W')
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible]), name='bvis')
+
+        
+    def get_hidden_values(self, inputs):
+        """Computes the values of the hidden layer."""
+        return tf.sigmoid(tf.matmul(inputs, self.params['W']) +
+                          self.params['bhid'])
+
+
+    def get_reconstructed_input(self, hidden):
+        """
+        Computes the reconstructed input given the values of the
+        hidden layer.
+        """
+        return tf.sigmoid(tf.matmul(hidden, self.params['W'], transpose_b=True) +
+                          self.params['bvis'])
+
+
     def features(self, *args):
         """Return weights in suitable manner for plotting."""
-        return self.W.eval().T
-
-
-    def cost_args(self, dataset):
-        """Return args to self.cost() for given dataset."""
-        return [dataset]
-
-
-    def train_feed(self, data):
-        """Return feed_dict based on data to be used for training."""
-        return {self.train_args[0]: data}
+        return self.params['W'].eval().T
 
 
 class Denoising(Auto):
@@ -201,6 +241,120 @@ class Denoising(Auto):
 
 
 
+class VAE(Coder):
+    """Variational Autoencoder."""
+    
+    param_names = ['Wxh', 'Mhz', 'Shz', 'Wzh', 'Mhx',
+                   'bWxh', 'bMhz', 'bShz', 'bWzh', 'bMhx']
+
+    def __init__(self, n_z=100, **kwargs):
+        """
+        n_z:
+        Dimension of latent variables.
+        """
+        
+        self.n_z = n_z
+        Coder.__init__(self, **kwargs)
+
+        # Train args has an additional element: sampling from latent space
+        self.train_args.append(tf.placeholder(tf.float32,
+                                              shape=[None, self.n_z]))
+
+
+    def init_params(self, constant=1):
+
+        self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden,
+                                         'Wxh', constant)
+        self.params['Mhz'] = xavier_init(self.n_hidden, self.n_z,
+                                         'Mhz', constant)
+        self.params['Shz'] = xavier_init(self.n_hidden, self.n_z,
+                                         'Shz', constant)
+
+        self.params['Wzh'] = xavier_init(self.n_z, self.n_hidden,
+                                         'Wzh', constant)
+        self.params['Mhx'] = xavier_init(self.n_hidden, self.n_visible,
+                                         'Mhx', constant)
+
+        self.params['bWxh'] = tf.Variable(tf.zeros([self.n_hidden]), name='bWxh')
+        self.params['bMhz'] = tf.Variable(tf.zeros([self.n_z]), name='bMhz')
+        self.params['bShz'] = tf.Variable(tf.zeros([self.n_z]), name='bShz')
+
+        self.params['bWzh'] = tf.Variable(tf.zeros([self.n_hidden]), name='bWxh')
+        self.params['bMhx'] = tf.Variable(tf.zeros([self.n_visible]), name='bMhx')
+
+
+    def get_h_inputs(self, inputs):
+        """Computes the values of the hidden layer, given inputs."""
+        return tf.sigmoid(tf.matmul(inputs, self.params['Wxh']) +
+                          self.params['bWxh'])
+
+
+    def get_hidden_values(self, inputs):
+        """Computes the values of the latent z variables."""
+        h = self.get_h_inputs(inputs)
+        return tf.matmul(h, self.params['Mhz']) + self.params['bMhz']
+
+
+    def get_h_latents(self, latents):
+        """Computes the values of the hidden layer, generative network."""
+        return tf.sigmoid(tf.matmul(latents, self.params['Wzh']) +
+                          self.params['bWzh'])
+
+
+    def get_reconstructed_input(self, latents):
+        """
+        Computes the reconstructed input given the values of the
+        latent z variables.
+        """
+        h = self.get_h_latents(latents)
+        return tf.sigmoid(tf.matmul(h, self.params['Mhx']) +
+                          self.params['bMhx'])
+
+
+    def cost(self, inputs, variation):
+        """
+        Cost for given input batch of samples, under current params.
+        """
+        h = self.get_h_inputs(inputs)
+        z_mu = tf.matmul(h, self.params['Mhz']) + self.params['bMhz']
+        z_sig = tf.matmul(h, self.params['Shz']) + self.params['bShz']
+
+        # KL divergence between latent space induced by encoder and ...
+        lat_loss = -tf.reduce_sum(1 + z_sig - z_mu**2 - tf.exp(z_sig), 1)
+
+        z = z_mu + tf.sqrt(tf.exp(z_sig)) * variation
+        h = self.get_h_latents(z)
+        x_mu = tf.sigmoid(tf.matmul(h, self.params['Mhx']) + self.params['bMhx'])
+        x_sig = tf.clip_by_value(x_mu * (1 - x_mu), .05, 1)
+
+        # decoding likelihood term
+        like_loss = tf.reduce_sum(tf.log(x_sig) +
+                                  (inputs - x_mu)**2 / x_sig, 1)
+
+#        # Mean cross entropy between input and encode-decoded input.
+#        like_loss = -2 * tf.reduce_sum(functions.cross_entropy(inputs, x_mu), 1)
+        
+        return .5 * tf.reduce_mean(like_loss + lat_loss)
+
+
+    def train_feed(self, data):
+        """Return feed_dict based on data to be used for training."""
+
+        return {self.train_args[0]: data,
+                self.train_args[1]: randn(data.shape[0], self.n_z)}
+
+
+    def cost_args(self, data):
+        """Return args to self.cost() for given dataset."""
+
+        return [data, randn(data.shape[0], self.n_z)]
+
+
+    def features(self, *args):
+        """Return weights in suitable manner for plotting."""
+        return self.params['Wxh'].eval().T
+
+
 class RBM(Auto):
     """Restricted Boltzmann Machine. Adapted from deeplearning.net."""
 
@@ -230,8 +384,8 @@ class RBM(Auto):
     def free_energy(self, v):
         """Approx free energy of system given visible unit values."""
 
-        Wx_b = tf.matmul(v, self.W) + self.bhid
-        vbias_term = tf.matmul(v, tf.expand_dims(self.bvis, 1))
+        Wx_b = tf.matmul(v, self.params['W']) + self.params['bhid']
+        vbias_term = tf.matmul(v, tf.expand_dims(self.params['bvis'], 1))
         hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)),
                                     reduction_indices=[1])
 
@@ -241,7 +395,7 @@ class RBM(Auto):
     def sample_h_given_v(self, v):
         """Given visible unit values, sample hidden unit values."""
 
-        mean_h = sigmoid(np.dot(v, self.W.eval()) + self.bhid.eval())
+        mean_h = sigmoid(np.dot(v, self.params['W'].eval()) + self.params['bhid'].eval())
         rnds = random_sample(mean_h.shape)
         return (mean_h > rnds).astype(np.float32)
         
@@ -249,7 +403,8 @@ class RBM(Auto):
     def sample_v_given_h(self, h):
         """Given hidden unit values, sample visible unit values."""
 
-        mean_v = sigmoid(np.dot(h, self.W.eval().T) + self.bvis.eval())
+        mean_v = sigmoid(np.dot(h, self.params['W'].eval().T) +
+                         self.params['bvis'].eval())
         rnds = random_sample(mean_v.shape)
         return (mean_v > rnds).astype(np.float32)
 
@@ -312,8 +467,8 @@ class RBM(Auto):
 
         Given hidden unit values, return expected visible unit values.
         """
-        W = self.W.eval().T
-        bvis = self.bvis.eval()
+        W = self.params['W'].eval().T
+        bvis = self.params['bvis'].eval()
         return sigmoid(np.dot(hidden, W) + bvis)
 
 
@@ -370,70 +525,38 @@ class RBM(Auto):
 
 
 
-class RNN(Auto):
+class RNN(Coder):
     """Recurrent neural network."""
 
-    def __init__(self, n_visible=28, n_hidden=100, seq_length=28, tie_Wxy=True,
-                 random_seed=123, fromfile=None, params=None, verbose=False,
-                 Wxh=None, Whh=None, Why=None, bhid=None, bvis=None):
-        """
-        params is a list of Wxh, Whh, Why, bhid and bvis in order.
+    param_names = ['Wxh', 'Whh', 'Why', 'bhid', 'bvis']
 
+    def __init__(self, n_visible=28, n_hidden=100, seq_length=28,
+                 random_seed=123, fromfile=None, params=None, verbose=False):
+        """
         seq_length is length of sequences used for training.
         """
                      
-        self.n_visible = n_visible
-        self.n_hidden = n_hidden
         self.seq_length = seq_length
-        self.verbose = verbose
+        Coder.__init__(self, n_visible=n_visible, n_hidden=n_hidden,
+                       random_seed=random_seed, fromfile=fromfile,
+                       params=params, verbose=verbose)
 
-        Why = None
-        if fromfile is not None:
-            save_file = open(fromfile)
-            Wxh = tf.Variable(cPickle.load(save_file), name='Wxh')
-            Whh = tf.Variable(cPickle.load(save_file), name='Whh')
-            if not tie_Wxy:
-                Why = tf.Variable(cPickle.load(save_file), name='Why')
-            bhid = tf.Variable(cPickle.load(save_file), name='bhid')
-            bvis = tf.Variable(cPickle.load(save_file), name='bvis')
-            save_file.close()
+    def init_params(self):
 
-        elif params is not None:
-            if tie_Wxy: Wxh, Whh, bhid, bvis = params
-            else: Wxh, Whh, Why, bhid, bvis = params
+        self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden, 'Wxh')
+        self.params['Whh'] = xavier_init(self.n_hidden, self.n_hidden, 'Whh')
 
-        else:
-            # Uniformly sample from +/-4*sqrt(6./(n_visible+n_hidden)).
-            if random_seed is not None: tf.set_random_seed(random_seed)
-            Winit_max = 4 * np.sqrt(6. / (n_hidden + n_visible))
-            Wxh = tf.Variable(tf.random_uniform([n_visible, n_hidden],
-                                                minval=-Winit_max, maxval=Winit_max,
-                                                dtype=tf.float32), name='Wxh')
-            if not tie_Wxy:
-                Why = tf.Variable(tf.random_uniform([n_hidden, n_visible],
-                                                    minval=-Winit_max, maxval=Winit_max,
-                                                    dtype=tf.float32), name='Wxh')
-            Winit_max = 4 * np.sqrt(3. / n_hidden)
-            Whh = tf.Variable(tf.random_uniform([n_hidden, n_hidden],
-                                                minval=-Winit_max, maxval=Winit_max,
-                                                dtype=tf.float32), name='Whh')
-            bvis = tf.Variable(tf.zeros([n_visible]), name='bvis')
-            bhid = tf.Variable(tf.zeros([n_hidden]), name='bhid')
+        if 'Why' in type(self).param_names:
+            self.params['Why'] = xavier_init(self.n_hidden, self.n_visible, 'Why')
 
-        self.Wxh = Wxh
-        self.Whh = Whh
-        self.Why = Why
-        self.bhid = bhid
-        self.bvis = bvis
-        self.tie_Wxy = tie_Wxy
-        if tie_Wxy:
-            self.params = [self.Wxh, self.Whh, self.bhid, self.bvis]
-        else:
-            self.params = [self.Wxh, self.Whh, self.Why, self.bhid, self.bvis]
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible]), name='bvis')
 
+
+    def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(tf.float32,
-                                          shape=[None, n_visible, seq_length])]
+                                          shape=[None, self.n_visible, self.seq_length])]
 
 
     def prep_mnist(self, data):
@@ -447,12 +570,13 @@ class RNN(Auto):
         Return new states and outputs corresponding to inputs.
         """
 
-        operand = tf.matmul(inputs, self.Wxh) + self.bhid
-        if states is not None: operand += tf.matmul(states, self.Whh)
+        operand = tf.matmul(inputs, self.params['Wxh']) + self.params['bhid']
+        if states is not None: operand += tf.matmul(states, self.params['Whh'])
         states = tf.sigmoid(operand)
         outputs = tf.sigmoid(tf.matmul(states,
-                                       self.Why or tf.transpose(self.Wxh)) +
-                             self.bvis)
+                                       self.params.get('Why',
+                                            tf.transpose(self.params['Wxh']))) +
+                             self.params['bvis'])
 
         return states, outputs
         
@@ -492,8 +616,9 @@ class RNN(Auto):
 
         hidden = []
         for row in tf.unpack(tf.transpose(visible, perm=[2, 0, 1])):
-            operand = tf.matmul(row, self.Wxh) + self.bhid
-            if states is not None: operand += tf.matmul(states, self.Whh)
+            operand = tf.matmul(row, self.params['Wxh']) + self.params['bhid']
+            if states is not None:
+                operand += tf.matmul(states, self.params['Whh'])
             hidden.append(operand if presigmoid else tf.sigmoid(operand))
             states = tf.sigmoid(operand) if presigmoid else hidden[-1]
             
@@ -533,11 +658,12 @@ class RNN(Auto):
             ends = randint(length, row_len, times)
             for e in ends: inputs.append(s.T[:e])
 
-        Wxh = self.Wxh.eval()
-        Whh = self.Whh.eval()
-        Why = self.Why.eval() if self.Why else Wxh.T
-        bhid = self.bhid.eval()
-        bvis = self.bvis.eval()
+        Wxh = self.params['Wxh'].eval()
+        Whh = self.params['Whh'].eval()
+        Why = self.params['Why'].eval() if 'Why' in self.params else Wxh.T
+        bhid = self.params['bhid'].eval()
+        bvis = self.params['bvis'].eval()
+        
         states, outputs = [], []
         for sample in inputs:
             s = np.zeros((1, self.n_hidden), dtype=np.float32)
@@ -564,8 +690,14 @@ class RNN(Auto):
         return results.T, (2 * length + 1, row_len)
 
 
-class RRBM(RBM, RNN):
+class RNNtie(RNN):
+    """Recurrent neural network with tied weights."""
+    param_names = ['Wxh', 'Whh', 'bhid', 'bvis']
+
+
+class RRBM(RBM, RNNtie):
     """Recurrent RBM."""
+    param_names = ['Wxh', 'Whh', 'bhid', 'bvis']
 
     def __init__(self, CDk=1, persistent=False, **kwargs):
         """
@@ -577,8 +709,7 @@ class RRBM(RBM, RNN):
         Set to True to use persistend CD.
         """
 
-        RNN.__init__(self, **kwargs)
-        assert self.tie_Wxy
+        RNNtie.__init__(self, **kwargs)
         self.CDk = CDk
         self.persistent = persistent
         self.chain_end = None
@@ -591,9 +722,9 @@ class RRBM(RBM, RNN):
         Given visible unit values, sample hidden unit values.
         """
 
-        Wxh = self.Wxh.eval()
-        bhid = self.bhid.eval()
-        Whh = self.Whh.eval()
+        Wxh = self.params['Wxh'].eval()
+        bhid = self.params['bhid'].eval()
+        Whh = self.params['Whh'].eval()
         dtype = bhid.dtype
         
         hidden = []
@@ -616,8 +747,9 @@ class RRBM(RBM, RNN):
         Given hidden unit values, return expected visible unit values.
         """
 
-        Why = self.Why.eval() if self.Why else self.Wxh.eval().T
-        bvis = self.bvis.eval()
+        Why = self.params['Why'].eval() if 'Why' in self.params else \
+              self.params['Wxh'].eval().T
+        bvis = self.params['bvis'].eval()
 
         visible = []
         for row in range(hidden.shape[2]):
@@ -636,12 +768,16 @@ class RRBM(RBM, RNN):
 
     def free_energy(self, visible):
 
-        vbias_term = [tf.squeeze(tf.matmul(row, tf.expand_dims(self.bvis, 1)))
+        vbias_term = [tf.squeeze(tf.matmul(row, tf.expand_dims(self.params['bvis'], 1)))
                       for row in tf.unpack(tf.transpose(visible, perm=[2, 0, 1]))]
 
-        hidden = self.get_hidden_values(visible, presigmoid=True)
+        hidden = RNN.get_hidden_values(self, visible, presigmoid=True)
         hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(hidden)),
                                     reduction_indices=[1, 2])
 
         return -hidden_term - tf.reduce_sum(tf.pack(vbias_term),
                                             reduction_indices=[0])
+
+
+    def features(self, data):
+        return RNNtie.features(self, data)
