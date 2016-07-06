@@ -35,7 +35,7 @@ def corrupt(dataset, corruption):
 
 def train(sess, coder, dataset, validation_set, verbose=False,
           training_epochs=10, learning_rate=0.001, batch_size=100,
-          corruption=None, **kwargs):
+          corruption=None):
     """
     Train a networks object on given data.
 
@@ -46,10 +46,6 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     dataset: dataset for training.
 
     validation_set: dataset for monitoring.
-    
-    corruption:
-    Perform adversarial training by corrupting dataset: set this fraction of
-    data to the mean value of data, picking the locations randomly each epoch.
     """
 
     train_step = tf.train.AdamOptimizer(learning_rate)\
@@ -71,3 +67,5 @@ def train(sess, coder, dataset, validation_set, verbose=False,
                           (epoch,
                            coder.cost(*coder.cost_args(validation_set)).eval(),
                            coder.rms_loss(validation_set).eval()))
+
+

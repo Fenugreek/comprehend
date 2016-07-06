@@ -27,6 +27,8 @@ if __name__ == '__main__':
                        help='size of each mini-batch')
     parser.add_argument('--hidden', metavar='N', type=int, default=500,
                        help='number of hidden units')
+    parser.add_argument('--visible', metavar='N', type=int,
+                       help='number of visible units; inferred from data if not specified')
     parser.add_argument('--epochs', metavar='N', type=int, default=10,
                        help='No. of epochs to train.')
     parser.add_argument('--random_seed', metavar='N', type=int, default=123,
@@ -34,33 +36,40 @@ if __name__ == '__main__':
     parser.add_argument('--use_tsp', action='store_true',
                         help='Use Traveling Salesman Problem solver when arranging features for display (takes time).')
     parser.add_argument('--mosaic', action='store_true', help="Display learnt model's reconstruction of corrupted input.")
-    parser.add_argument('--verbose', action='store_true', help='print progress')
+    parser.add_argument('--quiet', action='store_true', help='do not print progress')
     args = parser.parse_args()
 
+    coder_class = getattr(networks, args.model)
     np.random.seed(args.random_seed)
-    train_data = cPickle.load(open(args.data)) if args.data else \
-                 mnist_data.read_data_sets('MNIST_data').train
-    dataset = train_data.images
+    if args.data:
+        dataset = cPickle.load(open(args.data))
+    else: #mnist
+        train_data = mnist_data.read_data_sets('MNIST_data').train
+        dataset = train_data.images
+        if hasattr(coder_class, 'prep_mnist'):
+            # massage data into shape liked by coder object.
+            dataset = coder_class.prep_mnist(dataset)
+
+    train_idx = 10 * len(dataset) / 11
+    valid_idx = train_idx + 50 * args.batch
+    print train_idx, valid_idx
     
     global coder
-    coder = getattr(networks, args.model)\
-               (n_hidden=args.hidden, verbose=args.verbose, fromfile=args.params)
-    if hasattr(coder, 'prep_mnist'):
-        # massage data into shape liked by coder object.
-        dataset = coder.prep_mnist(dataset)
+    coder = coder_class(n_hidden=args.hidden, n_visible=args.visible or dataset.shape[-1],
+                        verbose=not args.quiet, fromfile=args.params)
     
     sess = tf.Session()
     with sess.as_default():
-        train.train(sess, coder, dataset[:50000], dataset[50000:51000],
+        train.train(sess, coder, dataset[:train_idx], dataset[train_idx:valid_idx],
                     training_epochs=args.epochs, batch_size=args.batch,
                     learning_rate=args.learning_rate,
-                    verbose=args.verbose)
+                    verbose=not args.quiet)
 
         if args.output is not None:
             coder.save_params(args.output+'params.dat')
 
         if hasattr(coder, 'features'):
-            results = coder.features(dataset[50000:51000])
+            results = coder.features(dataset[train_idx:valid_idx])
             if type(results) is not tuple: results = (results,)
             tiles = features.tile(*results, scale=True, corr=True,
                                   use_tsp=args.use_tsp)
@@ -71,7 +80,7 @@ if __name__ == '__main__':
                 pyplot.imsave(args.output+'features.png', tiles, origin='upper')
 
         if args.mosaic:
-            sample = mnist.get_sample(train_data, start_idx=50000)
+            sample = mnist.get_sample(train_data, start_idx=train_idx)
             if hasattr(coder, 'prep_mnist'): sample = coder.prep_mnist(sample)
             results = mnist.test_coder(coder, sample)
             img = mnist.mosaic(results, show=args.output is None)
