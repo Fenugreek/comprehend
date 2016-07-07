@@ -300,6 +300,18 @@ class RBM(Auto):
         return -tf.squeeze(hidden_term) - tf.squeeze(vbias_term) - tf.squeeze(hWx)
     
         
+    def grad_energy_v(self, h):
+        """Gradient of energy with respect to visible values."""
+        return -tf.expand_dims(self.params['bvis'], 0) \
+               -tf.matmul(h, self.params['W'], transpose_b=True)
+
+
+    def grad_energy_h(self, v):
+        """Gradient of energy with respect to hidden values."""
+        return -tf.expand_dims(self.params['bhid'], 0) \
+               -tf.matmul(v, self.params['W'])
+
+        
     def sample_h_given_v(self, v):
         """
         Given visible unit values, sample hidden unit values.
