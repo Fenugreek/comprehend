@@ -2,56 +2,79 @@
 Coumpound NN architectures, built from the fundamental types in networks module.
 """
 import tensorflow as tf
-import networks, train
+import networks, train, functions
 import numpy
 
-class RNNRBM(networks.RNN):
+class RNNRBM(object):
     """Recurrent neural network with an RBM on top of the hidden layer."""
 
-    def __init__(self, rnn, rbm, verbose=False):
+    def __init__(self, rnn, rbm, clean_energy=None, verbose=False):
 
         self.rnn = rnn
         self.rbm = rbm
+        self.rnn.params['Why'] = self.rbm.params['W']
+        self.rnn.params['bvis'] = self.rbm.params['bhid']
+
         self.verbose = verbose
-        self.autoencode = False
-        self.clean_energy = None
-
-    def update(self, states, inputs):
-        """
-        Update states given old states and new inputs, autoencoding states.
-        Return new states and outputs corresponding to inputs.
-        """
-
-        params = self.rnn.params
-        operand = tf.matmul(inputs, params['Wxh']) + params['bhid']
-        if states is not None: operand += tf.matmul(states, params['Whh'])
-
-        states = tf.sigmoid(operand)
-        if self.autoencode: states = self.rbm.recode(states)
-        
-        outputs = tf.sigmoid(tf.matmul(states, params['Why']) + params['bvis'])
-
-        return states, outputs
+        self.clean_energy = clean_energy
     
 
-    def recode(self, inputs):
+    def energy(self, states, outputs):
+        states = tf.transpose(tf.pack(states), perm=[1, 0, 2])
+        outputs = tf.transpose(tf.pack(outputs), perm=[1, 0, 2])
+        energy = self.rbm.energy(tf.reshape(states, (-1, self.rbm.n_visible)),
+                                 tf.reshape(outputs, (-1, self.rnn.n_visible)))
+        if self.verbose: print tf.reduce_mean(energy).eval()
+        return energy
 
-        if self.clean_energy is None:
-            return networks.RNN.recode(self, inputs)
+
+    def recode(self, inputs, max_iters=20, rate=.5):
+
+        if self.clean_energy is None: return self.rnn.recode(inputs)
         
         outputs, states = \
-           self.get_outputs(inputs, None, states=[], outputs=[], as_list=True)
+           self.rnn.get_outputs(inputs, None, states=[], outputs=[], as_list=True)
 
-        states = tf.transpose(tf.pack(states), perm=[1, 0, 2])
-        #Gradient descent to match clean energy.
-        states = train.descent(states.eval().reshape((-1, self.rbm.n_visible)),
-                   lambda x: self.rbm.free_energy(x).eval(),
-                   self.rbm.grad_free_energy,
-                   target_objective=self.clean_energy,
-                   verbose=self.verbose, adaptive_rate=.01)
-        outputs = tf.sigmoid(tf.matmul(states, self.rnn.params['Why']) +
-                                     self.rnn.params['bvis'])
-        return tf.transpose(tf.reshape(outputs,
-                                       (-1, self.rnn.seq_length, self.rnn.n_visible)),
-                            perm=[0, 2, 1])
-#        return outputs.reshape((-1, self.rnn.seq_length, self.rnn.n_visible)).swapaxes(1, 2)
+        params = self.rnn.params
+                                 
+        rows = tf.unpack(tf.transpose(inputs, perm=[2, 0, 1]))
+        iters = 0
+        while iters < max_iters and \
+            tf.reduce_mean(self.energy(states[3:-4], rows[4:-3])).eval() > \
+                                    self.clean_energy:
+            #Proceed with gradient descent to match clean energy.
+            #Needs to be row by row, as subsequent rows affected by earlier rows.    
+            states = []
+            for i in range(len(rows)):
+                operand = tf.matmul(rows[i], params['Wxh']) + params['bhid']
+                if states: operand += tf.matmul(clean_state, params['Whh'])
+                state = tf.sigmoid(operand)
+                states.append(state)
+                if i == len(rows) - 1: continue
+
+                out = rows[i+1]
+                gradient = self.rbm.grad_energy_v(out) * state * (1 - state) #presigmoid
+                clean_state = tf.sigmoid(functions.logit(state) - rate * gradient)
+                gradient = self.rbm.grad_energy_h(state) * out * (1 - out) #presigmoid
+                rows[i+1] = tf.sigmoid(functions.logit(out) - rate * gradient)
+                
+            iters += 1
+                    
+        return tf.transpose(tf.pack(rows), perm=[1, 2, 0])
+
+
+
+def data_to_RBM(rnn, data):
+    """
+    Given an RNN object, convert input data to hidden states and associated
+    visible outputs. These can then be used to train an RBM on top of the RNN.
+    """
+
+    states = [tf.zeros((data.shape[0], rnn.n_hidden))]
+    states.extend(rnn.get_hidden_values(data[:, :, :-1], as_list=True))
+    states = rnn.get_hidden_values(data[:, :, :-1], as_list=True)
+    states = tf.transpose(tf.pack(states), perm=[1, 0, 2])
+    outputs = data[:, :, 1:].swapaxes(1, 2)
+
+    return tf.reshape(states, (-1, rnn.n_hidden)), \
+           outputs.reshape((-1, rnn.n_visible))
