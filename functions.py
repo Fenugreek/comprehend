@@ -13,3 +13,9 @@ import tensorflow as tf
 
 def cross_entropy(x, y, eps=1e-8):
     return x * tf.log(y + eps) + (1 - x) * tf.log(1 - y + eps)
+
+
+def logit(data, eps=1e-8):
+    """Inverse of the sigmoid function."""
+
+    return -tf.log(1 / (data + eps) - 1 + eps)
