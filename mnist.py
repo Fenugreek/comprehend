@@ -44,7 +44,8 @@ def get_sample(dataset=None, samples=10, start_idx=0):
     return X[np.array(results).flatten()]
 
 
-def test_coder(coder, sample, corruption=.3, block_corruption=.2):
+def test_coder(coder, sample, corruption=.3, block_corruption=.2, random_seed=123,
+               **kwargs):
     """
     Test a neural network on MNIST sample. Returns a list of
     (input, nn output) images.
@@ -63,24 +64,25 @@ def test_coder(coder, sample, corruption=.3, block_corruption=.2):
     As before, but corruption is a random rectangle of this size.
     """
     
+    if random_seed is not None: np.random.seed(random_seed)
     if type(sample) == list:
-        return [(s, coder.recode(s[0]).eval()) for s in sample]
+        return [(s, coder.recode(s[0], **kwargs).eval()) for s in sample]
     
-    results = [(sample, coder.recode(sample).eval())]
+    results = [(sample, coder.recode(sample, **kwargs).eval())]
     size = len(sample[0])
     
     if corruption is not None:
         corrupted = train.corrupt(sample, corruption)
-        results.append((corrupted, coder.recode(corrupted).eval()))
+        results.append((corrupted, coder.recode(corrupted, **kwargs).eval()))
 
     if block_corruption is not None:
         corrupted = block_corrupt(sample, block_corruption)
-        results.append((corrupted, coder.recode(corrupted).eval()))
+        results.append((corrupted, coder.recode(corrupted, **kwargs).eval()))
 
     return results
     
 
-def mosaic(results, show=True, transpose=False):
+def mosaic(results, show=True, transpose=True):
     """
     Convert output of test_coder() into a 2D image suitable for display.
     Returns the associated 2D array.
@@ -144,7 +146,7 @@ def block_corrupt(dataX, corruption_level=.1):
         ind_y = np.arange(loc_y[i], loc_y[i] + li, dtype=int) % length
         corrupted = img.copy().reshape((length, length))
         corrupted[(np.tile(ind_x, li),
-                   np.repeat(ind_y, bi))] = random(bi * li)
+                   np.repeat(ind_y, bi))] = np.zeros(bi * li)#random(bi * li)
         corruptX[i] = corrupted.reshape(img.shape)
 
     return corruptX
