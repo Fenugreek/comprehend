@@ -113,7 +113,7 @@ def mosaic(results, show=True, transpose=True):
     mosaic = np.concatenate(mosaic, axis=1)
 
     if show:
-        pyplot.imshow(mosaic)
+        pyplot.imshow(mosaic, interpolation='none')
         pyplot.show()
         
     return mosaic
@@ -146,7 +146,8 @@ def block_corrupt(dataX, corruption_level=.1):
         ind_y = np.arange(loc_y[i], loc_y[i] + li, dtype=int) % length
         corrupted = img.copy().reshape((length, length))
         corrupted[(np.tile(ind_x, li),
-                   np.repeat(ind_y, bi))] = np.zeros(bi * li)#random(bi * li)
+                   np.repeat(ind_y, bi))] = random(bi * li)
+#                                         = np.zeros(bi * li)
         corruptX[i] = corrupted.reshape(img.shape)
 
     return corruptX
