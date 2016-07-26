@@ -19,11 +19,15 @@ import functions, train
 from tamarind.functions import sigmoid, unit_scale
 from scipy.stats import multivariate_normal
 
-def xavier_init(fan_in, fan_out, name='W', constant=4): 
-    """ Xavier initialization of network weights"""
-    # https://stackoverflow.com/questions/33640581/how-to-do-xavier-initialization-on-tensorflow
-    bound = constant*np.sqrt(6.0/(fan_in + fan_out))
-    return tf.Variable(tf.random_uniform((fan_in, fan_out),
+def xavier_init(fan_in, fan_out, name='W', constant=4, shape=None): 
+    """
+    Xavier initialization of network weights.
+
+    See https://stackoverflow.com/questions/33640581/how-to-do-xavier-initialization-on-tensorflow
+    """
+    
+    bound = constant * np.sqrt(6.0 / (fan_in + fan_out))
+    return tf.Variable(tf.random_uniform((fan_in, fan_out) if shape is None else shape,
                                          minval=-bound, maxval=bound, 
                                          dtype=tf.float32, name=name))
 
@@ -238,6 +242,52 @@ class Denoising(Auto):
         """Return feed_dict based on data to be used for training."""
         return {self.train_args[0]: data,
                 self.train_args[1]: train.corrupt(data, self.corruption)}
+
+
+
+class Convolutional(Coder):
+    """
+    Convolutional Auto-Encoder.
+    """
+    
+    param_names = ['W', 'bhid', 'bvis']
+
+    def __init__(self, input_shape=(28, 28), kernel_shape=(5, 5),
+                 pool_shape=(2, 2), **kwargs):
+        """
+        input_shape:
+        (rows, columns). Defaults to (sqrt(n_visible), sqrt(n_visible))
+        """
+
+        self.shapes = (input_shape, kernel_shape, pool_shape)
+        kwargs['n_visible'] = np.prod(input_shape)
+        Coder.__init__(self, **kwargs)
+
+
+    def init_params(self):
+
+        conv_out = np.prod([(i - k + 1) / p for i, k, p in zip(*self.shapes)])
+        
+        self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
+                                       shape=self.shapes[1] + (1, self.n_hidden),
+                                       name='W')
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible]), name='bvis')
+
+
+    def get_hidden_values(self, inputs):
+
+        inputs_d = tf.reshape(inputs, (-1,) + self.shapes[0] + (1,))
+
+        h_conv = tf.nn.conv2d(inputs_d, self.params['W'],
+                              strides=[1, 1, 1, 1], padding='VALID')
+        hiddens = tf.sigmoid(h_conv + self.params['bhid'])
+
+        pool_shape = (1,) + self.shapes[2] + (1,)
+        return hiddens, tf.nn.max_pool_with_argmax(hiddens, ksize=pool_shape, Targmax=tf.int64,
+                                                   strides=pool_shape, padding='VALID')
+
+
 
 
 
