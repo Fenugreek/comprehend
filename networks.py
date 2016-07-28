@@ -300,8 +300,8 @@ class CAE(Coder):
                               [batch_size] + dims + [p * p, self.n_hidden])
             mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
                                 perm=[0, 1, 2, 4, 3])
-            masked = tf.reshape(mask * pool, [batch_size] + dims + [-1])
-            hidden =  tf.depth_to_space(masked, p)
+            pool = tf.reshape(mask * pool, [batch_size] + dims + [-1])
+            hidden =  tf.depth_to_space(pool, p)
 
         shape = (batch_size,) + self.shapes[0] + (1,)
         outputs_d = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
