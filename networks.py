@@ -245,44 +245,67 @@ class Denoising(Auto):
 
 
 
-class CAE(Coder):
+class Conv(Coder):
     """
     Convolutional Auto-Encoder.
     """
     
     param_names = ['W', 'bhid', 'bvis']
 
-    def __init__(self, input_shape=(28, 28), kernel_shape=(5, 5),
-                 pool_block=2, batch_size=100, **kwargs):
+    @staticmethod
+    def prep_mnist(data):
         """
-        input_shape:
-        (rows, columns). Defaults to (sqrt(n_visible), sqrt(n_visible))
+        Reshape MNIST data from batch x pixels to
+        batch x rows x columns x channels.
         """
+        return data.reshape(-1, 28, 28, 1)
+
+
+    def __init__(self, input_shape=[28, 28], kernel_shape=[5, 5],
+                 batch_size=100, **kwargs):
+        """
+        input_shape, kernel_shape:
+        (rows, columns) of input data and convolution kernel respectively.
+
+        n_hidden:
+        Number of feature maps to use.
+
+        batch_size:
+        batch size to expect during gradient descent training
+        (computation graph needs this ahead of time).
+        """
+        
         self.batch_size = batch_size
-        self.shapes = (input_shape, kernel_shape, pool_block)
+        self.shapes = (input_shape, kernel_shape)
         kwargs['n_visible'] = np.prod(input_shape)
         Coder.__init__(self, **kwargs)
+
+
+    def init_train_args(self, **kwargs):
+        # To be used for training by tf.Optimizer objects.
+        self.train_args = [tf.placeholder(tf.float32,
+                                          shape=[None] + self.shapes[0] + [1])]
 
 
     def init_params(self):
 
         # Compute effective number of neurons per filter.
-        conv_out = np.prod([(i - k + 1) for i, k in zip(self.shapes[0],
-                                                        self.shapes[1])])
-        conv_out /= self.shapes[2]**2
+        conv_out = np.prod([(i - k + 1) for i, k in zip(*self.shapes)])
+        if hasattr(self, 'block_size'): conv_out /= self.block_size**2
+        elif hasattr(self, 'block_width'):
+            print('no')
+            conv_out /= self.block_width
         
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
-                                       shape=self.shapes[1] + (1, self.n_hidden),
+                                       shape=self.shapes[1] + [1, self.n_hidden],
                                        name='W')
         self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
-        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible]), name='bvis')
+        self.params['bvis'] = tf.Variable(tf.zeros(self.shapes[0] + [1]), name='bvis')
 
 
     def get_hidden_values(self, inputs):
 
-        inputs_d = tf.reshape(inputs, (-1,) + self.shapes[0] + (1,))
-
-        h_conv = tf.nn.conv2d(inputs_d, self.params['W'],
+        h_conv = tf.nn.conv2d(inputs, self.params['W'],
                               strides=[1, 1, 1, 1], padding='VALID')
         return tf.sigmoid(h_conv + self.params['bhid'])
 
@@ -292,23 +315,28 @@ class CAE(Coder):
         batch_size = hidden.get_shape()[0].value
         if type(batch_size) != int: batch_size = self.batch_size
         
-        if self.shapes[2]:
-            p = self.shapes[2]
-            dims = [(self.shapes[0][i] - self.shapes[1][i] + 1) / p
-                    for i in range(2)]
-            pool = tf.reshape(tf.space_to_depth(hidden, p),
-                              [batch_size] + dims + [p * p, self.n_hidden])
-            mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
-                                perm=[0, 1, 2, 4, 3])
-            pool = tf.reshape(mask * pool, [batch_size] + dims + [-1])
-            hidden =  tf.depth_to_space(pool, p)
-
-        shape = (batch_size,) + self.shapes[0] + (1,)
-        outputs_d = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
-                                           [1, 1, 1, 1], padding='VALID')
-        outputs = tf.reshape(outputs_d, (-1, self.n_visible))
+        shape = [batch_size] + self.shapes[0] + [1]
+        outputs = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
+                                         [1, 1, 1, 1], padding='VALID')
         
         return tf.sigmoid(outputs + self.params['bvis'])
+
+
+    def cost(self, inputs):
+        """
+        Cost for given input batch of samples, under current params.
+        Mean cross entropy between input and encode-decoded input.
+        """
+        loss = functions.cross_entropy(inputs, self.recode(inputs))
+        return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1, 2]))
+
+
+    def rms_loss(self, inputs):
+        """
+        Root-mean-squared difference between <inputs> and encoded-decoded output.
+        """
+        loss = tf.squared_difference(inputs, self.recode(inputs))
+        return tf.reduce_mean(tf.reduce_mean(loss, reduction_indices=[1, 2]) ** .5)
 
 
     def features(self, *args):
@@ -317,6 +345,89 @@ class CAE(Coder):
         W = tf.transpose(tf.squeeze(self.params['W']), perm=[2, 0, 1]).eval()
         return W.reshape((W.shape[0], -1))
 
+
+class ConvMaxBlock(Conv):
+    """
+    Convolutional Auto-Encoder with max pooling, on non-overlapping
+    square blocks.
+    """
+
+    def __init__(self, block_size=2, **kwargs):
+        """
+        block_size:
+        Do max pooling on block_size x block_size non-overlapping
+        patches of input.
+        """
+
+        self.block_size = block_size
+        Conv.__init__(self, **kwargs)
+
+
+    def get_hidden_values(self, input):
+
+        hidden = Conv.get_hidden_values(self, input)
+        
+        p = self.block_size
+        dims = [(self.shapes[0][i] - self.shapes[1][i] + 1) / p
+                for i in range(2)]
+        pool = tf.reshape(tf.space_to_depth(hidden, p),
+                          [-1] + dims + [p * p, self.n_hidden])
+
+        mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
+                            perm=[0, 1, 2, 4, 3])
+        pool = tf.reshape(mask * pool, [-1] + dims + [p * p * self.n_hidden])
+        return tf.depth_to_space(pool, p)
+
+
+class ConvMax1D(Conv):
+    """
+    Convolutional Auto-Encoder with max pooling, using a kernel shape
+    that covers height of input completely.
+    
+    So results of convolution is 1D, and max pooling is done on this 1D.
+    """
+
+    @staticmethod
+    def prep_mnist(data):
+        """
+        Reshape MNIST data from batch x pixels to
+        batch x columns x rows x channels.
+        """
+        return data.reshape(-1, 28, 28, 1).swapaxes(1, 2)
+
+
+    def __init__(self, input_shape=(28, 28),
+                 kernel_width=5, block_width=3, **kwargs):
+        """
+        input_shape, axis:
+        (rows, columns) of input data and axis along which convolution kernel
+        slides.
+
+        kernel_width, block_width:
+        The 1D size of the kernel along the dimension to slide, and
+        the 1D size of the max pooling window.
+        """
+
+        self.block_width = block_width
+        kernel_shape = (input_shape[0], kernel_width)
+        
+        Conv.__init__(self, input_shape=input_shape, kernel_shape=kernel_shape,
+                      **kwargs)
+
+
+    def get_hidden_values(self, input):
+
+        hidden = Conv.get_hidden_values(self, input)
+        p = self.block_width
+        dims = [(self.shapes[0][i] - self.shapes[1][i] + 1) / p
+                for i in range(2)]
+        pool = tf.reshape(tf.space_to_depth(hidden, p),
+                          [-1] + dims + [p * p, self.n_hidden])
+
+        mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
+                            perm=[0, 1, 2, 4, 3])
+        pool = tf.reshape(mask * pool, [-1] + dims + [p * p * self.n_hidden])
+        return tf.depth_to_space(pool, p)
 
 
 class RBM(Auto):
