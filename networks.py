@@ -245,7 +245,7 @@ class Denoising(Auto):
 
 
 
-class Convolutional(Coder):
+class CAE(Coder):
     """
     Convolutional Auto-Encoder.
     """
@@ -253,20 +253,23 @@ class Convolutional(Coder):
     param_names = ['W', 'bhid', 'bvis']
 
     def __init__(self, input_shape=(28, 28), kernel_shape=(5, 5),
-                 pool_shape=(2, 2), **kwargs):
+                 pool_block=2, batch_size=100, **kwargs):
         """
         input_shape:
         (rows, columns). Defaults to (sqrt(n_visible), sqrt(n_visible))
         """
-
-        self.shapes = (input_shape, kernel_shape, pool_shape)
+        self.batch_size = batch_size
+        self.shapes = (input_shape, kernel_shape, pool_block)
         kwargs['n_visible'] = np.prod(input_shape)
         Coder.__init__(self, **kwargs)
 
 
     def init_params(self):
 
-        conv_out = np.prod([(i - k + 1) / p for i, k, p in zip(*self.shapes)])
+        # Compute effective number of neurons per filter.
+        conv_out = np.prod([(i - k + 1) for i, k in zip(self.shapes[0],
+                                                        self.shapes[1])])
+        conv_out /= self.shapes[2]**2
         
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
                                        shape=self.shapes[1] + (1, self.n_hidden),
@@ -281,13 +284,38 @@ class Convolutional(Coder):
 
         h_conv = tf.nn.conv2d(inputs_d, self.params['W'],
                               strides=[1, 1, 1, 1], padding='VALID')
-        hiddens = tf.sigmoid(h_conv + self.params['bhid'])
-
-        pool_shape = (1,) + self.shapes[2] + (1,)
-        return hiddens, tf.nn.max_pool_with_argmax(hiddens, ksize=pool_shape, Targmax=tf.int64,
-                                                   strides=pool_shape, padding='VALID')
+        return tf.sigmoid(h_conv + self.params['bhid'])
 
 
+    def get_reconstructed_input(self, hidden):
+
+        batch_size = hidden.get_shape()[0].value
+        if type(batch_size) != int: batch_size = self.batch_size
+        
+        if self.shapes[2]:
+            p = self.shapes[2]
+            dims = [(self.shapes[0][i] - self.shapes[1][i] + 1) / p
+                    for i in range(2)]
+            pool = tf.reshape(tf.space_to_depth(hidden, p),
+                              [batch_size] + dims + [p * p, self.n_hidden])
+            mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
+                                perm=[0, 1, 2, 4, 3])
+            masked = tf.reshape(mask * pool, [batch_size] + dims + [-1])
+            hidden =  tf.depth_to_space(masked, p)
+
+        shape = (batch_size,) + self.shapes[0] + (1,)
+        outputs_d = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
+                                           [1, 1, 1, 1], padding='VALID')
+        outputs = tf.reshape(outputs_d, (-1, self.n_visible))
+        
+        return tf.sigmoid(outputs + self.params['bvis'])
+
+
+    def features(self, *args):
+        """Return n_hidden number of kernels, rasterized one per row."""
+        
+        W = tf.transpose(tf.squeeze(self.params['W']), perm=[2, 0, 1]).eval()
+        return W.reshape((W.shape[0], -1))
 
 
 
