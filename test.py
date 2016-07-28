@@ -47,17 +47,16 @@ if __name__ == '__main__':
         train_data = mnist_data.read_data_sets('MNIST_data').train
         dataset = train_data.images
         if hasattr(coder_class, 'prep_mnist'):
-            # massage data into shape liked by coder object.
             dataset = coder_class.prep_mnist(dataset)
-
+            
     train_idx = 10 * len(dataset) / 11
-    valid_idx = train_idx + 50 * args.batch
-    print train_idx, valid_idx
-    
+    valid_idx = train_idx + 5 * args.batch
+    print "Train samples %d, validation samples %d" % (train_idx, valid_idx)
+  
     global coder
     coder = coder_class(n_hidden=args.hidden, n_visible=args.visible or dataset.shape[-1],
-                        verbose=not args.quiet, fromfile=args.params)
-    
+                        verbose=not args.quiet, fromfile=args.params, batch_size=args.batch)
+            
     sess = tf.Session()
     with sess.as_default():
         train.train(sess, coder, dataset[:train_idx], dataset[train_idx:valid_idx],
