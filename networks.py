@@ -256,9 +256,9 @@ class Conv(Coder):
     def prep_mnist(data):
         """
         Reshape MNIST data from batch x pixels to
-        batch x rows x columns x channels.
+        batch x columns x rows x channels.
         """
-        return data.reshape(-1, 28, 28, 1)
+        return data.reshape((-1, 28, 28, 1)).swapaxes(1, 2)
 
 
     def __init__(self, input_shape=[28, 28], kernel_shape=[5, 5],
@@ -292,9 +292,7 @@ class Conv(Coder):
         # Compute effective number of neurons per filter.
         conv_out = np.prod([(i - k + 1) for i, k in zip(*self.shapes)])
         if hasattr(self, 'block_size'): conv_out /= self.block_size**2
-        elif hasattr(self, 'block_width'):
-            print('no')
-            conv_out /= self.block_width
+        elif hasattr(self, 'block_width'): conv_out /= self.block_width
         
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
                                        shape=self.shapes[1] + [1, self.n_hidden],
@@ -342,8 +340,8 @@ class Conv(Coder):
     def features(self, *args):
         """Return n_hidden number of kernels, rasterized one per row."""
         
-        W = tf.transpose(tf.squeeze(self.params['W']), perm=[2, 0, 1]).eval()
-        return W.reshape((W.shape[0], -1))
+        W = tf.transpose(tf.squeeze(self.params['W']), perm=[2, 0, 1])
+        return W.eval()
 
 
 class ConvMaxBlock(Conv):
@@ -373,6 +371,7 @@ class ConvMaxBlock(Conv):
         pool = tf.reshape(tf.space_to_depth(hidden, p),
                           [-1] + dims + [p * p, self.n_hidden])
 
+        # Replace all non-max values with 0.0.
         mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
                             perm=[0, 1, 2, 4, 3])
         pool = tf.reshape(mask * pool, [-1] + dims + [p * p * self.n_hidden])
@@ -387,16 +386,7 @@ class ConvMax1D(Conv):
     So results of convolution is 1D, and max pooling is done on this 1D.
     """
 
-    @staticmethod
-    def prep_mnist(data):
-        """
-        Reshape MNIST data from batch x pixels to
-        batch x columns x rows x channels.
-        """
-        return data.reshape(-1, 28, 28, 1).swapaxes(1, 2)
-
-
-    def __init__(self, input_shape=(28, 28),
+    def __init__(self, input_shape=[28, 28],
                  kernel_width=5, block_width=3, **kwargs):
         """
         input_shape, axis:
@@ -409,7 +399,7 @@ class ConvMax1D(Conv):
         """
 
         self.block_width = block_width
-        kernel_shape = (input_shape[0], kernel_width)
+        kernel_shape = [input_shape[0], kernel_width]
         
         Conv.__init__(self, input_shape=input_shape, kernel_shape=kernel_shape,
                       **kwargs)
@@ -418,16 +408,16 @@ class ConvMax1D(Conv):
     def get_hidden_values(self, input):
 
         hidden = Conv.get_hidden_values(self, input)
-        p = self.block_width
-        dims = [(self.shapes[0][i] - self.shapes[1][i] + 1) / p
-                for i in range(2)]
-        pool = tf.reshape(tf.space_to_depth(hidden, p),
-                          [-1] + dims + [p * p, self.n_hidden])
 
-        mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
-                            perm=[0, 1, 2, 4, 3])
-        pool = tf.reshape(mask * pool, [-1] + dims + [p * p * self.n_hidden])
-        return tf.depth_to_space(pool, p)
+        p = self.block_width        
+        dim = (self.shapes[0][1] - self.shapes[1][1] + 1) / p
+        pool = tf.reshape(tf.transpose(hidden, perm=[0, 3, 1, 2]),
+                          [-1, self.n_hidden, 1, dim, p])
+
+        # Replace all non-max values with 0.0.
+        pool *= tf.one_hot(tf.argmax(pool, 4), p, axis=-1)
+        return tf.transpose(tf.reshape(pool, [-1, self.n_hidden, 1, dim * p]),
+                            perm=[0, 2, 3, 1])
 
 
 class RBM(Auto):
