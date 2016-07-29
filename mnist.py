@@ -91,7 +91,8 @@ def mosaic(results, show=True, transpose=True):
     If True, plot the image.
     """
 
-    if transpose: results = np.array(results).swapaxes(0, 1)
+    results = np.array(results).squeeze()
+    if transpose: results = results.swapaxes(0, 1)
     
     data_type = results[0][0].dtype
     divider = np.zeros((3, 307), dtype=data_type)

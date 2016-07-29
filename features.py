@@ -28,7 +28,7 @@ def corrsort(features, use_tsp=False):
 
     Without use_tsp, both computation and memory are O(N^2).
     """
-    
+
     correlations = np.ma.corrcoef(features)
     if use_tsp: return tsp.solve_tsp(-correlations)
 
@@ -83,7 +83,7 @@ def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
     """
 
     if shape is None:
-        if X.ndim == 3: shape = (X.shape[-1], X.shape[-2])
+        if X.ndim == 3: shape = X.shape[1:]
         else: shape = integers.squarest_factors(X.shape[-1])
     else: assert len(shape) == 2
 
@@ -92,7 +92,9 @@ def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
     
     assert len(spacing) == 2
 
-    if corr is True: X = X[corrsort(X, use_tsp=use_tsp)]
+    if corr is True:
+        if X.ndim == 2: X = X[corrsort(X, use_tsp=use_tsp)]
+        else: X = X[corrsort(X.reshape((len(X), -1)), use_tsp=use_tsp)]
         
     H, W = shape
     Hs, Ws = spacing
@@ -106,9 +108,8 @@ def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
         for tile_col in range(tile[1]):
             if tile_row * tile[1] + tile_col >= X.shape[0]: continue
 
-            this_x = X[tile_row * tile[1] + tile_col]
-            if X.ndim == 3: this_img = this_x.T
-            else: this_img = this_x.reshape(shape)
+            this_img = X[tile_row * tile[1] + tile_col]
+            if X.ndim == 2: this_img = this_img.reshape(shape)
             if scale: this_img = unit_scale(this_img)
 
             # add the slice to the corresponding position of  output array
