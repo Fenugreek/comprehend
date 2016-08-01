@@ -25,6 +25,8 @@ if __name__ == '__main__':
                        help='learning rate for gradient descent algorithm')
     parser.add_argument('--batch', metavar='N', type=int, default=100,
                        help='size of each mini-batch')
+    parser.add_argument('--valid_batch', metavar='N', type=int, default=10,
+                       help='size of validation batch in mini-batch multiples')
     parser.add_argument('--hidden', metavar='N', type=int, default=500,
                        help='number of hidden units')
     parser.add_argument('--visible', metavar='N', type=int,
@@ -50,7 +52,7 @@ if __name__ == '__main__':
             dataset = coder_class.prep_mnist(dataset)
             
     train_idx = 10 * len(dataset) / 11
-    valid_idx = train_idx + 5 * args.batch
+    valid_idx = train_idx + args.valid_batch * args.batch
     print "Train samples %d, validation samples %d" % (train_idx, valid_idx)
   
     global coder
@@ -66,6 +68,9 @@ if __name__ == '__main__':
 
         if args.output is not None:
             coder.save_params(args.output+'params.dat')
+            if args.dump_hidden:
+                coder.dump_hidden(dataset, args.output+'hidden.dat',
+                                  batch_size=args.batch)
 
         if hasattr(coder, 'features'):
             results = coder.features(dataset[train_idx:valid_idx])
