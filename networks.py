@@ -99,7 +99,30 @@ class Coder(object):
         for variable in self.params.values():
             cPickle.dump(variable.eval(), save_file, -1) 
         save_file.close()    
+
         
+    def dump_hidden(self, data, filename, batch_size=None):
+        """
+        Compute hidden values for given input data, according to current
+        weights of the network, and then write to disk.
+
+        Useful to perform training on subsequent layer.
+
+        batch_size:
+        Compute hidden values for these many rows at a time, to save memory.
+        """
+        save_file = open(filename, 'wb')
+
+        if batch_size:
+            hidden = []
+            for i in range(0, len(data), batch_size):
+                hidden.append(self.get_hidden_values(data[i:i+batch_size]).eval())
+                hidden = np.concatenate(hidden)
+        else: hidden = self.get_hidden_values(data)
+        
+        cPickle.dump(hidden, save_file, -1) 
+        save_file.close()    
+
 
     def cost_args(self, dataset):
         """Return args to self.cost() for given dataset."""
@@ -170,7 +193,7 @@ class Auto(Coder):
     param_names = ['W', 'bhid', 'bvis']
 
 
-    def init_params(self):
+    def init_params(self, **kwargs):
 
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden, name='W')
         self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
@@ -276,7 +299,7 @@ class Conv(Coder):
         """
         
         self.batch_size = batch_size
-        self.shapes = (input_shape, kernel_shape)
+        self.shapes = [input_shape, kernel_shape]
         kwargs['n_visible'] = np.prod(input_shape)
         Coder.__init__(self, **kwargs)
 
@@ -360,22 +383,32 @@ class ConvMaxBlock(Conv):
         self.block_size = block_size
         Conv.__init__(self, **kwargs)
 
+        # Pool shape
+        self.shapes.append([self.batch_size] + \
+                           [(self.shapes[0][i] - self.shapes[1][i] + 1) /
+                            block_size for i in range(2)] + \
+                           [block_size**2, self.n_hidden])
+        self.zeros = tf.zeros(self.shapes[-1], dtype=tf.float32)
 
-    def get_hidden_values(self, input):
+
+    def get_hidden_values(self, input, reduced=False):
 
         hidden = Conv.get_hidden_values(self, input)
         
-        p = self.block_size
-        dims = [(self.shapes[0][i] - self.shapes[1][i] + 1) / p
-                for i in range(2)]
-        pool = tf.reshape(tf.space_to_depth(hidden, p),
-                          [-1] + dims + [p * p, self.n_hidden])
+        pool_shape = self.shapes[2]
+        pool = tf.reshape(tf.space_to_depth(hidden, self.block_size),
+                          pool_shape)
 
+        if reduced: return tf.reduce_max(pool, 3)
+        
         # Replace all non-max values with 0.0.
-        mask = tf.transpose(tf.one_hot(tf.argmax(pool, 3), p * p, axis=-1),
-                            perm=[0, 1, 2, 4, 3])
-        pool = tf.reshape(mask * pool, [-1] + dims + [p * p * self.n_hidden])
-        return tf.depth_to_space(pool, p)
+        overlay = tf.one_hot(tf.argmax(pool, 3), self.block_size**2,
+                             axis=3, on_value=True, off_value=False)
+        pool = tf.select(overlay, pool, self.zeros)
+        
+        return tf.depth_to_space(tf.reshape(pool, pool_shape[:3] + \
+                                    [pool_shape[3] * pool_shape[4]]),
+                                 self.block_size)
 
 
 class ConvMax1D(Conv):
