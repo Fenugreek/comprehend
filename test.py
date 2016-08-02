@@ -19,8 +19,6 @@ if __name__ == '__main__':
                        help='previous params_final.dat file to load from and resume training.')
     parser.add_argument('--data', metavar='<filename.dat>',
                        help='data file to use for training. Default: MNIST')
-    parser.add_argument('--output', metavar='<path/prefix>',
-                       help='output params and figures to <path/prefix>{params,features,mosaic}.dat.')
     parser.add_argument('--learning_rate', metavar='R', type=float, default=0.001,
                        help='learning rate for gradient descent algorithm')
     parser.add_argument('--batch', metavar='N', type=int, default=100,
@@ -35,6 +33,10 @@ if __name__ == '__main__':
                        help='No. of epochs to train.')
     parser.add_argument('--random_seed', metavar='N', type=int, default=123,
                        help='Seed random number generator with this, for repeatable results.')
+    parser.add_argument('--output', metavar='<path/prefix>',
+                       help='output params and figures to <path/prefix>{params,features,mosaic}.dat.')
+    parser.add_argument('--dump_hidden', action='store_true',
+                       help='dump computed hidden values to disk')
     parser.add_argument('--use_tsp', action='store_true',
                         help='Use Traveling Salesman Problem solver when arranging features for display (takes time).')
     parser.add_argument('--mosaic', action='store_true', help="Display learnt model's reconstruction of corrupted input.")
