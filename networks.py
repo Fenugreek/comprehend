@@ -36,6 +36,7 @@ class Coder(object):
     """Virtual NN with skeleton implementation of common functions."""
 
     param_names = []
+    attr_names = ['n_visible', 'n_hidden']
 
     def __init__(self, n_visible=784, n_hidden=500, verbose=False,
                  random_seed=123, params=None, fromfile=None, **kwargs):
@@ -57,8 +58,8 @@ class Coder(object):
         :type verbose: bool
         :param verbose:  whether to print certain log messages.
 
-        :type fromfile: str
-        :param fromfile:  initialize params from this saved file
+        :type fromfile: str or filehandle
+        :param fromfile: initialize params from this saved file
         """
         
         self.n_visible = n_visible
@@ -71,11 +72,18 @@ class Coder(object):
         else: 
             self.params = OrderedDict()
             if fromfile is not None:
-                save_file = open(fromfile)
+                is_handle = type(fromfile) == file
+                save_file = fromfile if is_handle else open(fromfile)
+
                 for name in type(self).param_names:
                     self.params[name] = tf.Variable(cPickle.load(save_file),
                                                     name=name)
-                save_file.close()
+                try:
+                    for attr in type(self).attr_names:
+                        setattr(self, attr, cPickle.load(save_file))
+                except EOFError: pass
+    
+                if not is_handle: save_file.close()
             else:
                 self.init_params(**kwargs)
             
@@ -91,14 +99,23 @@ class Coder(object):
                                           shape=[None, self.n_visible])]
 
     
-    def save_params(self, filename):
+    def save_params(self, tofile):
         """
         Save params to disk, compatible with fromfile option of constructor.
+        If argument is a string, a new file is with that name is written to.
+        If argument is a file handle, data is written to that.
         """
-        save_file = open(filename, 'wb')
+
+        is_handle = type(tofile) == file
+        save_file = tofile if is_handle else open(tofile, 'wb')
+        
         for variable in self.params.values():
-            cPickle.dump(variable.eval(), save_file, -1) 
-        save_file.close()    
+            cPickle.dump(variable.eval(), save_file, -1)
+
+        for attr in type(self).attr_names:
+            cPickle.dump(getattr(self, attr), save_file, -1)
+
+        if not is_handle: save_file.close()    
 
         
     def dump_hidden(self, data, filename, batch_size=None):
@@ -117,7 +134,7 @@ class Coder(object):
             hidden = []
             for i in range(0, len(data), batch_size):
                 hidden.append(self.get_hidden_values(data[i:i+batch_size]).eval())
-                hidden = np.concatenate(hidden)
+            hidden = np.concatenate(hidden)
         else: hidden = self.get_hidden_values(data)
         
         cPickle.dump(hidden, save_file, -1) 
@@ -274,6 +291,7 @@ class Conv(Coder):
     """
     
     param_names = ['W', 'bhid', 'bvis']
+    attr_names = Coder.attr_names + ['shapes']
 
     @staticmethod
     def prep_mnist(data):
@@ -372,6 +390,7 @@ class ConvMaxBlock(Conv):
     Convolutional Auto-Encoder with max pooling, on non-overlapping
     square blocks.
     """
+    attr_names = Conv.attr_names + ['block_size']
 
     def __init__(self, block_size=2, **kwargs):
         """
@@ -389,9 +408,10 @@ class ConvMaxBlock(Conv):
                             block_size for i in range(2)] + \
                            [block_size**2, self.n_hidden])
         self.zeros = tf.zeros(self.shapes[-1], dtype=tf.float32)
+        self.state = {}
 
 
-    def get_hidden_values(self, input, reduced=False):
+    def get_hidden_values(self, input, reduced=False, store=False):
 
         hidden = Conv.get_hidden_values(self, input)
         
@@ -399,16 +419,47 @@ class ConvMaxBlock(Conv):
         pool = tf.reshape(tf.space_to_depth(hidden, self.block_size),
                           pool_shape)
 
-        if reduced: return tf.reduce_max(pool, 3)
-        
+        if reduced and not store: return tf.reduce_max(pool, 3)
+                    
         # Replace all non-max values with 0.0.
         overlay = tf.one_hot(tf.argmax(pool, 3), self.block_size**2,
                              axis=3, on_value=True, off_value=False)
+        if store: self.state['overlay'] = overlay
+
+        if reduced: return tf.reduce_max(pool, 3)
+        
         pool = tf.select(overlay, pool, self.zeros)
         
         return tf.depth_to_space(tf.reshape(pool, pool_shape[:3] + \
                                     [pool_shape[3] * pool_shape[4]]),
                                  self.block_size)
+
+
+    def dump_hidden(self, data, filename, batch_size=None):
+        """
+        Compute hidden values for given input data, according to current
+        weights of the network, and then write to disk.
+
+        Useful to perform training on subsequent layer.
+
+        batch_size:
+        Compute hidden values for these many rows at a time, to save memory.
+        """
+        save_file = open(filename, 'wb')
+
+        if batch_size and batch_size != self.batch_size:
+            print('Unsupported batch size %d using %d.',
+                  batch_size, self.batch_size)
+        batch_size = self.batch_size
+        
+        hidden = []
+        for i in range(0, len(data), batch_size):
+            h = self.get_hidden_values(data[i:i+batch_size],
+                                       store=True, reduced=True)
+            hidden.append(h.eval().reshape(batch_size, -1))
+        
+        cPickle.dump(np.concatenate(hidden), save_file, -1) 
+        save_file.close()    
 
 
 class ConvMax1D(Conv):
