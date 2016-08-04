@@ -462,48 +462,6 @@ class ConvMaxBlock(Conv):
         save_file.close()    
 
 
-class ConvMax1D(Conv):
-    """
-    Convolutional Auto-Encoder with max pooling, using a kernel shape
-    that covers height of input completely.
-    
-    So results of convolution is 1D, and max pooling is done on this 1D.
-    """
-
-    def __init__(self, input_shape=[28, 28],
-                 kernel_width=5, block_width=3, **kwargs):
-        """
-        input_shape, axis:
-        (rows, columns) of input data and axis along which convolution kernel
-        slides.
-
-        kernel_width, block_width:
-        The 1D size of the kernel along the dimension to slide, and
-        the 1D size of the max pooling window.
-        """
-
-        self.block_width = block_width
-        kernel_shape = [input_shape[0], kernel_width]
-        
-        Conv.__init__(self, input_shape=input_shape, kernel_shape=kernel_shape,
-                      **kwargs)
-
-
-    def get_hidden_values(self, input):
-
-        hidden = Conv.get_hidden_values(self, input)
-
-        p = self.block_width        
-        dim = (self.shapes[0][1] - self.shapes[1][1] + 1) / p
-        pool = tf.reshape(tf.transpose(hidden, perm=[0, 3, 1, 2]),
-                          [-1, self.n_hidden, 1, dim, p])
-
-        # Replace all non-max values with 0.0.
-        pool *= tf.one_hot(tf.argmax(pool, 4), p, axis=-1)
-        return tf.transpose(tf.reshape(pool, [-1, self.n_hidden, 1, dim * p]),
-                            perm=[0, 2, 3, 1])
-
-
 class RBM(Auto):
     """Restricted Boltzmann Machine. Adapted from deeplearning.net."""
 
@@ -921,11 +879,28 @@ class RNN(Coder):
 
 
     def features(self, sample, length=None, scale=True):
-        """XXX: Work in progress."""
+        """
+        Returns a rasterized 2D image for each hidden unit, along with
+        the shape of each (unrasterized) such image.
+
+        Top half of the image comprises the <length> rows of input that tend to
+        activate the hidden unit.
+
+        This is computed by sampling <length> sequential rows from <sample>
+        input, computing end states when the RNN is fed these sequences, and
+        taking a weighted average of the sequential rows where the weights are
+        the squared state values.
+
+        Bottom half of the image comprises <length> sequential rows of output
+        when the RNN is rolled forward from the above input image.
+
+        Middle two rows of the image comprise Wxh and Why.T weights.
+        """
 
         row_len = self.n_visible
         if length is None: length = row_len / 2
 
+        #### sample sequential rows from <sample> ####
         times = row_len // length
         sample_size = len(sample) * times
         inputs = []
@@ -933,6 +908,8 @@ class RNN(Coder):
             ends = randint(length, row_len, times)
             for e in ends: inputs.append(s.T[:e])
 
+        # We switch to numpy for processing, as it is much faster when
+        # we run the RNN one row at a time one sample at a time.
         Wxh = self.params['Wxh'].eval()
         Whh = self.params['Whh'].eval()
         Why = self.params['Why'].eval() if 'Why' in self.params else Wxh.T
@@ -941,11 +918,13 @@ class RNN(Coder):
         
         states, outputs = [], []
         for sample in inputs:
+            # For top half of feature image.
             s = np.zeros((1, self.n_hidden), dtype=np.float32)
             for row in sample:
                 s = sigmoid(np.dot(row, Wxh) + np.dot(s, Whh) + bhid)
             states.append(s)
             
+            # For bottom half of feature image.
             o = [sigmoid(np.dot(s, Why) + bvis)]
             for i in range(length - 1):
                 s = sigmoid(np.dot(o[-1], Wxh) + np.dot(s, Whh) + bhid)
@@ -953,16 +932,22 @@ class RNN(Coder):
             outputs.append(np.array(o).squeeze().flatten())
 
         weights = np.array(states).squeeze()**2
+
+        # top half
         rows = np.array([i[-length:].flatten() for i in inputs])
-
         prefix = np.dot(rows.T, weights) / np.sum(weights, axis=0)
+        # bottom half
         suffix = np.dot(np.array(outputs).T, weights) / np.sum(weights, axis=0)
-        results = np.concatenate((prefix, prefix[:row_len], suffix))
-        if scale: results = unit_scale(results, axis=0)
-
-        results[len(prefix):len(prefix) + row_len] = unit_scale(Why.T, axis=0)
         
-        return results.T, (2 * length + 1, row_len)
+        if scale:
+            prefix = unit_scale(prefix, axis=0)
+            suffix = unit_scale(suffix, axis=0)
+
+        results = np.concatenate((prefix,
+                                  unit_scale(Wxh, axis=0),
+                                  unit_scale(Why.T, axis=0),
+                                  suffix))
+        return results.T, (2 * length + 2, row_len)
 
 
 class RNNtie(RNN):
