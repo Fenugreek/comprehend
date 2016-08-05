@@ -16,7 +16,7 @@ import cPickle
 from collections import OrderedDict
 
 import functions, train
-from tamarind.functions import sigmoid, unit_scale
+from tamarind.functions import sigmoid, unit_scale, logit
 from scipy.stats import multivariate_normal
 
 def xavier_init(fan_in, fan_out, name='W', constant=4, shape=None): 
@@ -889,12 +889,18 @@ class RNN(Coder):
         This is computed by sampling <length> sequential rows from <sample>
         input, computing end states when the RNN is fed these sequences, and
         taking a weighted average of the sequential rows where the weights are
-        the squared state values.
+        the pre-sigmoid state values (floored at 0.0).
 
         Bottom half of the image comprises <length> sequential rows of output
-        when the RNN is rolled forward from the above input image.
+        when the RNN is rolled forward from the end-point of the top half.
+
+        This is computed by taking a weighted average of the sequential rows of
+        rolled forward output where the weights are the same weights as for the
+        top half computation.
 
         Middle two rows of the image comprise Wxh and Why.T weights.
+
+        scale: Normalize features for each hidden unit to between 0.0 amd 1.0.
         """
 
         row_len = self.n_visible
@@ -922,7 +928,7 @@ class RNN(Coder):
             s = np.zeros((1, self.n_hidden), dtype=np.float32)
             for row in sample:
                 s = sigmoid(np.dot(row, Wxh) + np.dot(s, Whh) + bhid)
-            states.append(s)
+            states.append(np.fmax(logit(s), 0))
             
             # For bottom half of feature image.
             o = [sigmoid(np.dot(s, Why) + bvis)]
@@ -931,7 +937,7 @@ class RNN(Coder):
                 o.append(sigmoid(np.dot(s, Why) + bvis))
             outputs.append(np.array(o).squeeze().flatten())
 
-        weights = np.array(states).squeeze()**2
+        weights = np.array(states).squeeze()
 
         # top half
         rows = np.array([i[-length:].flatten() for i in inputs])
@@ -944,6 +950,7 @@ class RNN(Coder):
             suffix = unit_scale(suffix, axis=0)
 
         results = np.concatenate((prefix,
+#                                  np.zeros(Wxh.shape),
                                   unit_scale(Wxh, axis=0),
                                   unit_scale(Why.T, axis=0),
                                   suffix))
