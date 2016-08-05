@@ -48,7 +48,7 @@ def corrsort(features, use_tsp=False):
 
 
 def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
-         corr=False, use_tsp=False):
+         corr=False, use_tsp=False, spacing_value=0):
     """
     Transform an array with one flattened image per row, into an array in
     which images are reshaped and layed out like tiles on a floor.
@@ -102,7 +102,7 @@ def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
     out_shape = [(ishp + tsp) * tshp - tsp
                  for ishp, tshp, tsp in zip(shape, tile, spacing)]
     dt = 'uint8' if bytes else X.dtype
-    out_array = np.zeros(out_shape, dtype=dt)
+    out_array = np.ones(out_shape, dtype=dt) * spacing_value
 
     for tile_row in range(tile[0]):
         for tile_col in range(tile[1]):
