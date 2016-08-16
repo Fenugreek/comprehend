@@ -29,6 +29,9 @@ if __name__ == '__main__':
                        help='number of hidden units')
     parser.add_argument('--visible', metavar='N', type=int,
                        help='number of visible units; inferred from data if not specified')
+    parser.add_argument('--options', metavar='<option>=<integer>[,<integer>...]', nargs='+',
+                       help='options to pass to constructor of network architecture; only integers supported for now.')
+    
     parser.add_argument('--epochs', metavar='N', type=int, default=10,
                        help='No. of epochs to train.')
     parser.add_argument('--random_seed', metavar='N', type=int, default=123,
@@ -43,10 +46,15 @@ if __name__ == '__main__':
     parser.add_argument('--quiet', action='store_true', help='do not print progress')
     args = parser.parse_args()
 
-    coder_class = getattr(networks, args.model)
+    if hasattr(networks, args.model): coder_class = getattr(networks, args.model)
+    else:
+        from proprietary import compound
+        coder_class = getattr(compound, args.model)
+        
     np.random.seed(args.random_seed)
     if args.data:
         dataset = cPickle.load(open(args.data))
+        if dataset.dtype != np.float32: dataset = dataset.astype(np.float32)
     else: #mnist
         train_data = mnist_data.read_data_sets('MNIST_data').train
         dataset = train_data.images
@@ -56,10 +64,17 @@ if __name__ == '__main__':
     train_idx = 10 * len(dataset) / 11
     valid_idx = train_idx + args.valid_batch * args.batch
     print "Train samples %d, validation samples %d" % (train_idx, valid_idx)
-  
+
+    kwargs = {}
+    for option in args.options or []:
+        key, value = option.split('=')
+        if ',' in value: kwargs[key] = [int(v) for v in value.split(',')]
+        else: kwargs[key] = int(value)
+
     global coder
     coder = coder_class(n_hidden=args.hidden, n_visible=args.visible or dataset.shape[-1],
-                        verbose=not args.quiet, fromfile=args.params, batch_size=args.batch)
+                        verbose=not args.quiet, fromfile=args.params, batch_size=args.batch,
+                        **kwargs)
             
     sess = tf.Session()
     with sess.as_default():
