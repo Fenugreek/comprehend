@@ -381,7 +381,7 @@ class Conv(Coder):
     def features(self, *args):
         """Return n_hidden number of kernels, rasterized one per row."""
         
-        W = tf.transpose(tf.squeeze(self.params['W']), perm=[2, 0, 1])
+        W = tf.transpose(tf.squeeze(self.params['W']), perm=[2, 1, 0])
         return W.eval()
 
 
@@ -455,7 +455,7 @@ class ConvMaxBlock(Conv):
         hidden = []
         for i in range(0, len(data), batch_size):
             h = self.get_hidden_values(data[i:i+batch_size],
-                                       store=True, reduced=True)
+                                       store=False, reduced=True)
             hidden.append(h.eval().reshape(batch_size, -1))
         
         cPickle.dump(np.concatenate(hidden), save_file, -1) 
