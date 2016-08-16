@@ -60,7 +60,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     for epoch in range(training_epochs):
 
         for index in range(n_train_batches):
-            batch = dataset[index * batch_size:(index + 1) * batch_size]
+            batch = dataset[index * batch_size : (index+1) * batch_size]
             train_step.run(feed_dict=coder.train_feed(batch))
 
         if verbose: print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
