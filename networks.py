@@ -19,6 +19,8 @@ import functions, train
 from tamarind.functions import sigmoid, unit_scale, logit
 from scipy.stats import multivariate_normal
 
+float_dt = tf.float32
+
 def xavier_init(fan_in, fan_out, name='W', constant=4, shape=None): 
     """
     Xavier initialization of network weights.
@@ -29,7 +31,7 @@ def xavier_init(fan_in, fan_out, name='W', constant=4, shape=None):
     bound = constant * np.sqrt(6.0 / (fan_in + fan_out))
     return tf.Variable(tf.random_uniform((fan_in, fan_out) if shape is None else shape,
                                          minval=-bound, maxval=bound, 
-                                         dtype=tf.float32, name=name))
+                                         dtype=float_dt, name=name))
 
 
 class Coder(object):
@@ -95,7 +97,7 @@ class Coder(object):
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
-        self.train_args = [tf.placeholder(tf.float32,
+        self.train_args = [tf.placeholder(float_dt,
                                           shape=[None, self.n_visible])]
 
     
@@ -259,7 +261,7 @@ class Denoising(Auto):
 
         # Train args has an additional element:
         #   the corrupted version of the input.
-        self.train_args.append(tf.placeholder(tf.float32,
+        self.train_args.append(tf.placeholder(float_dt,
                                               shape=[None, self.n_visible]))
         
 
@@ -317,14 +319,15 @@ class Conv(Coder):
         """
         
         self.batch_size = batch_size
-        self.shapes = [input_shape, kernel_shape]
-        kwargs['n_visible'] = np.prod(input_shape)
+        if not kwargs.get('fromfile'):
+            self.shapes = [input_shape, kernel_shape]
+            kwargs['n_visible'] = np.prod(input_shape)
         Coder.__init__(self, **kwargs)
 
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
-        self.train_args = [tf.placeholder(tf.float32,
+        self.train_args = [tf.placeholder(float_dt,
                                           shape=[None] + self.shapes[0] + [1])]
 
 
@@ -332,8 +335,8 @@ class Conv(Coder):
 
         # Compute effective number of neurons per filter.
         conv_out = np.prod([(i - k + 1) for i, k in zip(*self.shapes)])
-        if hasattr(self, 'block_size'): conv_out /= self.block_size**2
-        elif hasattr(self, 'block_width'): conv_out /= self.block_width
+        if hasattr(self, 'pool_side'): conv_out /= self.pool_side**2
+        elif hasattr(self, 'pool_width'): conv_out /= self.pool_width
         
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
                                        shape=self.shapes[1] + [1, self.n_hidden],
@@ -381,33 +384,36 @@ class Conv(Coder):
     def features(self, *args):
         """Return n_hidden number of kernels, rasterized one per row."""
         
-        W = tf.transpose(tf.squeeze(self.params['W']), perm=[2, 1, 0])
+        W = tf.transpose(tf.squeeze(self.params['W'], squeeze_dims=[2]))
         return W.eval()
 
 
-class ConvMaxBlock(Conv):
+class ConvMaxSquare(Conv):
     """
     Convolutional Auto-Encoder with max pooling, on non-overlapping
     square blocks.
     """
-    attr_names = Conv.attr_names + ['block_size']
+    attr_names = Conv.attr_names + ['pool_side']
 
-    def __init__(self, block_size=2, **kwargs):
+    def __init__(self, pool_side=2, **kwargs):
         """
-        block_size:
-        Do max pooling on block_size x block_size non-overlapping
+        pool_side:
+        Do max pooling on pool_side x pool_side non-overlapping
         patches of input.
         """
 
-        self.block_size = block_size
         Conv.__init__(self, **kwargs)
+
+        if not kwargs.get('fromfile'):
+            self.pool_side = pool_side
+            self.shapes.append([])
 
         # Pool shape
         self.shapes.append([self.batch_size] + \
                            [(self.shapes[0][i] - self.shapes[1][i] + 1) /
-                            block_size for i in range(2)] + \
-                           [block_size**2, self.n_hidden])
-        self.zeros = tf.zeros(self.shapes[-1], dtype=tf.float32)
+                            pool_side for i in range(2)] + \
+                           [pool_side**2, self.n_hidden])
+        self.zeros = tf.zeros(self.shapes[-1], dtype=float_dt)
         self.state = {}
 
 
@@ -416,13 +422,13 @@ class ConvMaxBlock(Conv):
         hidden = Conv.get_hidden_values(self, input)
         
         pool_shape = self.shapes[2]
-        pool = tf.reshape(tf.space_to_depth(hidden, self.block_size),
+        pool = tf.reshape(tf.space_to_depth(hidden, self.pool_side),
                           pool_shape)
 
         if reduced and not store: return tf.reduce_max(pool, 3)
                     
         # Replace all non-max values with 0.0.
-        overlay = tf.one_hot(tf.argmax(pool, 3), self.block_size**2,
+        overlay = tf.one_hot(tf.argmax(pool, 3), self.pool_side**2,
                              axis=3, on_value=True, off_value=False)
         if store: self.state['overlay'] = overlay
 
@@ -432,7 +438,7 @@ class ConvMaxBlock(Conv):
         
         return tf.depth_to_space(tf.reshape(pool, pool_shape[:3] + \
                                     [pool_shape[3] * pool_shape[4]]),
-                                 self.block_size)
+                                 self.pool_side)
 
 
     def dump_hidden(self, data, filename, batch_size=None):
@@ -484,9 +490,9 @@ class RBM(Auto):
         
 
     def init_train_args(self, **kwargs):
-        self.train_args = [tf.placeholder(tf.float32,
+        self.train_args = [tf.placeholder(float_dt,
                                           shape=[None, self.n_visible]),
-                           tf.placeholder(tf.float32,
+                           tf.placeholder(float_dt,
                                           shape=[None, self.n_visible])]
 
 
@@ -693,10 +699,10 @@ class ERBM(RBM):
         so flatten the two sets into a simple list.
         """
         self.train_args = \
-            [tf.placeholder(tf.float32, shape=[None, self.n_visible]),
-             tf.placeholder(tf.float32, shape=[None, self.n_hidden]),
-             tf.placeholder(tf.float32, shape=[None, self.n_visible]),
-             tf.placeholder(tf.float32, shape=[None, self.n_hidden])]
+            [tf.placeholder(float_dt, shape=[None, self.n_visible]),
+             tf.placeholder(float_dt, shape=[None, self.n_hidden]),
+             tf.placeholder(float_dt, shape=[None, self.n_visible]),
+             tf.placeholder(float_dt, shape=[None, self.n_hidden])]
 
 
     def cost(self, v, h, chain_v, chain_h):
@@ -784,7 +790,7 @@ class RNN(Coder):
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
-        self.train_args = [tf.placeholder(tf.float32,
+        self.train_args = [tf.placeholder(float_dt,
                                           shape=[None, self.n_visible, self.seq_length])]
 
 
@@ -979,7 +985,7 @@ class VAE(Coder):
         Coder.__init__(self, **kwargs)
 
         # Train args has an additional element: sampling from latent space
-        self.train_args.append(tf.placeholder(tf.float32,
+        self.train_args.append(tf.placeholder(float_dt,
                                               shape=[None, self.n_z]))
 
 
