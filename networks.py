@@ -120,26 +120,37 @@ class Coder(object):
         if not is_handle: save_file.close()    
 
         
-    def dump_hidden(self, data, filename, batch_size=None):
+    def dump_output(self, data, filename, kind='hidden', batch_size=None):
         """
-        Compute hidden values for given input data, according to current
+        Compute hidden/recode values for given input data, according to current
         weights of the network, and then write to disk.
 
-        Useful to perform training on subsequent layer.
+        Useful to perform training on subsequent layer ('hidden'), or
+        comparison of recoded input with original ('recode').
+
+        kind:
+        'hidden' or 'recode'.
+        Values of hidden units, or reconstructed visible units
 
         batch_size:
         Compute hidden values for these many rows at a time, to save memory.
         """
         save_file = open(filename, 'wb')
 
-        if batch_size:
-            hidden = []
-            for i in range(0, len(data), batch_size):
-                hidden.append(self.get_hidden_values(data[i:i+batch_size]).eval())
-            hidden = np.concatenate(hidden)
-        else: hidden = self.get_hidden_values(data)
+        if kind == 'hidden':
+            method = lambda x: self.get_hidden_values(x)
+        elif kind == 'recode':
+            method = lambda x: self.recode(x)
+        else: raise ValueError('Do not understand kind option: ' + kind)
         
-        cPickle.dump(hidden, save_file, -1) 
+        if batch_size:
+            output = []
+            for i in range(0, len(data), batch_size):
+                output.append(method(data[i:i+batch_size]).eval())
+            output = np.concatenate(output)
+        else: output = method(data)
+        
+        cPickle.dump(output, save_file, -1) 
         save_file.close()    
 
 
@@ -409,14 +420,22 @@ class ConvMaxSquare(Conv):
             self.shapes.append([])
 
         # Pool shape
-        self.shapes.append([self.batch_size] + \
-                           [(self.shapes[0][i] - self.shapes[1][i] + 1) /
-                            pool_side for i in range(2)] + \
-                           [pool_side**2, self.n_hidden])
-        self.zeros = tf.zeros(self.shapes[-1], dtype=float_dt)
+        self.shapes[2] = [self.batch_size] + \
+                         [(self.shapes[0][i] - self.shapes[1][i] + 1) /
+                          self.pool_side for i in range(2)] + \
+                          [self.pool_side**2, self.n_hidden]
+        self.zeros = tf.zeros(self.shapes[2], dtype=float_dt)
         self.state = {}
 
 
+    def set_batch_size(self, batch_size):
+
+        if self.batch_size == batch_size: return
+        self.batch_size = batch_size
+        self.shapes[2][0] = batch_size
+        self.zeros = tf.zeros(self.shapes[2], dtype=float_dt)
+        
+        
     def get_hidden_values(self, input, reduced=False, store=False):
 
         hidden = Conv.get_hidden_values(self, input)
@@ -441,30 +460,35 @@ class ConvMaxSquare(Conv):
                                  self.pool_side)
 
 
-    def dump_hidden(self, data, filename, batch_size=None):
+    def dump_output(self, data, filename, kind='hidden', batch_size=None):
         """
-        Compute hidden values for given input data, according to current
-        weights of the network, and then write to disk.
+        See documentation in parent class.
+        
+        Only difference is, batch_size if supplied must not be different from
+        self.batch_size, and is provided here only for backwards compatibility.
 
-        Useful to perform training on subsequent layer.
-
-        batch_size:
-        Compute hidden values for these many rows at a time, to save memory.
+        Output is always computed via batch.
         """
         save_file = open(filename, 'wb')
+
+
+        if kind == 'hidden':
+            method = lambda x: self.get_hidden_values(x, reduced=True)
+        elif kind == 'recode':
+            method = lambda x: self.recode(x)
+        else: raise ValueError('Do not understand kind option: ' + kind)
 
         if batch_size and batch_size != self.batch_size:
             print('Unsupported batch size %d using %d.',
                   batch_size, self.batch_size)
         batch_size = self.batch_size
         
-        hidden = []
-        for i in range(0, len(data), batch_size):
-            h = self.get_hidden_values(data[i:i+batch_size],
-                                       store=False, reduced=True)
-            hidden.append(h.eval().reshape(batch_size, -1))
+        output = []
+        for i in range(0, len(data) - batch_size + 1, batch_size):
+            o = method(data[i:i+batch_size]).eval()
+            output.append(o.reshape(batch_size, -1) if kind == 'hidden' else o)
         
-        cPickle.dump(np.concatenate(hidden), save_file, -1) 
+        cPickle.dump(np.concatenate(output), save_file, -1) 
         save_file.close()    
 
 
