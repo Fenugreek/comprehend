@@ -8,8 +8,7 @@ import numpy as np
 from matplotlib import pyplot
 
 import tensorflow as tf
-import tensorflow.examples.tutorials.mnist.input_data as mnist_data
-import networks, train, features, mnist
+import networks, train, features
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
@@ -23,7 +22,7 @@ if __name__ == '__main__':
                        help='learning rate for gradient descent algorithm')
     parser.add_argument('--batch', metavar='N', type=int, default=100,
                        help='size of each mini-batch')
-    parser.add_argument('--valid_batch', metavar='N', type=int, default=10,
+    parser.add_argument('--valid_batch', metavar='N', type=int, default=1,
                        help='size of validation batch in mini-batch multiples')
     parser.add_argument('--hidden', metavar='N', type=int, default=500,
                        help='number of hidden units')
@@ -38,8 +37,8 @@ if __name__ == '__main__':
                        help='Seed random number generator with this, for repeatable results.')
     parser.add_argument('--output', metavar='<path/prefix>',
                        help='output params and figures to <path/prefix>{params,features,mosaic}.dat.')
-    parser.add_argument('--dump_hidden', action='store_true',
-                       help='dump computed hidden values to disk')
+    parser.add_argument('--dump', metavar='{hidden|recode}',
+                       help='dump computed hidden or recoded values to disk. Needs --output to be specified also.')
     parser.add_argument('--use_tsp', action='store_true',
                         help='Use Traveling Salesman Problem solver when arranging features for display (takes time).')
     parser.add_argument('--mosaic', action='store_true', help="Display learnt model's reconstruction of corrupted input.")
@@ -56,12 +55,13 @@ if __name__ == '__main__':
         dataset = cPickle.load(open(args.data))
         if dataset.dtype != np.float32: dataset = dataset.astype(np.float32)
     else: #mnist
+        import tensorflow.examples.tutorials.mnist.input_data as mnist_data
         train_data = mnist_data.read_data_sets('MNIST_data').train
         dataset = train_data.images
         if hasattr(coder_class, 'prep_mnist'):
             dataset = coder_class.prep_mnist(dataset)
             
-    train_idx = 10 * len(dataset) / 11
+    train_idx = 20 * len(dataset) / 21
     valid_idx = train_idx + args.valid_batch * args.batch
     print "Train samples %d, validation samples %d" % (train_idx, valid_idx)
 
@@ -71,12 +71,13 @@ if __name__ == '__main__':
         if ',' in value: kwargs[key] = [int(v) for v in value.split(',')]
         else: kwargs[key] = int(value)
 
+    print kwargs
     global coder
     coder = coder_class(n_hidden=args.hidden, n_visible=args.visible or dataset.shape[-1],
                         verbose=not args.quiet, fromfile=args.params, batch_size=args.batch,
                         **kwargs)
             
-    sess = tf.Session()
+    sess = tf.Session(config=tf.ConfigProto(log_device_placement=False))
     with sess.as_default():
         train.train(sess, coder, dataset[:train_idx], dataset[train_idx:valid_idx],
                     training_epochs=args.epochs, batch_size=args.batch,
@@ -84,10 +85,11 @@ if __name__ == '__main__':
                     verbose=not args.quiet)
 
         if args.output is not None:
-            coder.save_params(args.output+'params.dat')
-            if args.dump_hidden:
-                coder.dump_hidden(dataset, args.output+'hidden.dat',
-                                  batch_size=args.batch)
+            if args.epochs or not args.params:
+                coder.save_params(args.output+'params.dat')
+            if args.dump:
+                coder.dump_output(dataset, args.output+args.dump+'.dat',
+                                  kind=args.dump, batch_size=args.batch)
 
         if hasattr(coder, 'features'):
             results = coder.features(dataset[train_idx:valid_idx])
@@ -101,6 +103,7 @@ if __name__ == '__main__':
                 pyplot.imsave(args.output+'features.png', tiles, origin='upper')
 
         if args.mosaic:
+            import mnist
             sample = mnist.get_sample(train_data, start_idx=train_idx)
             if hasattr(coder, 'prep_mnist'): sample = coder.prep_mnist(sample)
             results = mnist.test_coder(coder, sample)
