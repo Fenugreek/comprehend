@@ -33,6 +33,22 @@ def corrupt(dataset, corruption):
     return corrupted.reshape(dataset.shape)
 
 
+def get_costs(coder, dataset, batch_size=100):
+    """
+    Return average cost function value and rms-loss value on validation
+    set by coder object with its current weights.
+    """
+    
+    n_batches = dataset.shape[0] // batch_size
+    cost, rms_loss = 0, 0
+    for index in range(n_batches):
+        batch = dataset[index * batch_size : (index+1) * batch_size]
+        cost += coder.cost(*coder.cost_args(batch)).eval()
+        rms_loss += coder.rms_loss(batch).eval()
+
+    return (cost / n_batches, rms_loss / n_batches)
+
+
 def train(sess, coder, dataset, validation_set, verbose=False,
           training_epochs=10, learning_rate=0.001, batch_size=100,
           corruption=None):
@@ -53,8 +69,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     sess.run(tf.initialize_all_variables())
 
     if verbose: print('Initial cost %.2f, r.m.s. loss %.3f' %
-                      (coder.cost(*coder.cost_args(validation_set)).eval(),
-                       coder.rms_loss(validation_set).eval()))
+                      get_costs(coder, validation_set, batch_size))
     
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
@@ -64,8 +79,6 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             train_step.run(feed_dict=coder.train_feed(batch))
 
         if verbose: print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
-                          (epoch,
-                           coder.cost(*coder.cost_args(validation_set)).eval(),
-                           coder.rms_loss(validation_set).eval()))
+                          ((epoch,) + get_costs(coder, validation_set, batch_size)))
 
 

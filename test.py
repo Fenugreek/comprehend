@@ -16,25 +16,26 @@ if __name__ == '__main__':
                        help='network architecture to load from networks module. Auto, Denoising, RBM, RNN, or VAE.')
     parser.add_argument('--params', metavar='<filename.dat>',
                        help='previous params_final.dat file to load from and resume training.')
-    parser.add_argument('--data', metavar='<filename.dat>',
-                       help='data file to use for training. Default: MNIST')
-    parser.add_argument('--learning_rate', metavar='R', type=float, default=0.001,
-                       help='learning rate for gradient descent algorithm')
-    parser.add_argument('--batch', metavar='N', type=int, default=100,
-                       help='size of each mini-batch')
-    parser.add_argument('--valid_batch', metavar='N', type=int, default=1,
-                       help='size of validation batch in mini-batch multiples')
-    parser.add_argument('--hidden', metavar='N', type=int, default=500,
-                       help='number of hidden units')
     parser.add_argument('--visible', metavar='N', type=int,
                        help='number of visible units; inferred from data if not specified')
+    parser.add_argument('--hidden', metavar='N', type=int, default=500,
+                       help='number of hidden units')
+    parser.add_argument('--data', metavar='<filename.dat>',
+                       help='data file to use for training. Default: MNIST')
+    parser.add_argument('--batch', metavar='N', type=int, default=100,
+                       help='size of each mini-batch')
+    parser.add_argument('--validation', metavar='R', type=float, default=.05,
+                       help='fraction of dataset to use as validation set.')
     parser.add_argument('--options', metavar='<option>=<integer>[,<integer>...]', nargs='+',
                        help='options to pass to constructor of network architecture; only integers supported for now.')
     
     parser.add_argument('--epochs', metavar='N', type=int, default=10,
                        help='No. of epochs to train.')
+    parser.add_argument('--learning_rate', metavar='R', type=float, default=0.001,
+                       help='learning rate for gradient descent algorithm')
     parser.add_argument('--random_seed', metavar='N', type=int, default=123,
                        help='Seed random number generator with this, for repeatable results.')
+
     parser.add_argument('--output', metavar='<path/prefix>',
                        help='output params and figures to <path/prefix>{params,features,mosaic}.dat.')
     parser.add_argument('--dump', metavar='{hidden|recode}',
@@ -61,9 +62,9 @@ if __name__ == '__main__':
         if hasattr(coder_class, 'prep_mnist'):
             dataset = coder_class.prep_mnist(dataset)
             
-    train_idx = 20 * len(dataset) / 21
-    valid_idx = train_idx + args.valid_batch * args.batch
-    print "Train samples %d, validation samples %d" % (train_idx, valid_idx)
+    train_idx = int((1.0 - args.validation) * len(dataset))
+    print "Train samples %d, validation samples %d" % (train_idx,
+                                                       len(dataset) - train_idx)
 
     kwargs = {}
     for option in args.options or []:
@@ -71,15 +72,15 @@ if __name__ == '__main__':
         if ',' in value: kwargs[key] = [int(v) for v in value.split(',')]
         else: kwargs[key] = int(value)
 
-    print kwargs
     global coder
     coder = coder_class(n_hidden=args.hidden, n_visible=args.visible or dataset.shape[-1],
                         verbose=not args.quiet, fromfile=args.params, batch_size=args.batch,
+                        coding=tf.nn.elu,
                         **kwargs)
             
     sess = tf.Session(config=tf.ConfigProto(log_device_placement=False))
     with sess.as_default():
-        train.train(sess, coder, dataset[:train_idx], dataset[train_idx:valid_idx],
+        train.train(sess, coder, dataset[:train_idx], dataset[train_idx:],
                     training_epochs=args.epochs, batch_size=args.batch,
                     learning_rate=args.learning_rate,
                     verbose=not args.quiet)
@@ -92,7 +93,7 @@ if __name__ == '__main__':
                                   kind=args.dump, batch_size=args.batch)
 
         if hasattr(coder, 'features'):
-            results = coder.features(dataset[train_idx:valid_idx])
+            results = coder.features(dataset[train_idx:])
             if type(results) is not tuple: results = (results,)
             tiles = features.tile(*results, scale=True, corr=True,
                                   use_tsp=args.use_tsp)
