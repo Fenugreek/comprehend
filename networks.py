@@ -41,7 +41,8 @@ class Coder(object):
     attr_names = ['n_visible', 'n_hidden']
 
     def __init__(self, n_visible=784, n_hidden=500, verbose=False,
-                 random_seed=123, params=None, fromfile=None, **kwargs):
+                 random_seed=123, params=None, fromfile=None,
+                 coding=tf.sigmoid, decoding=tf.sigmoid, **kwargs):
         """
         Initialize the object by specifying the number of visible units (the
         dimension d of the input), the number of hidden units (the dimension
@@ -62,11 +63,22 @@ class Coder(object):
 
         :type fromfile: str or filehandle
         :param fromfile: initialize params from this saved file
+
+        :type coding: function
+        :param coding: activation function for converting linear combination of
+                       visible units' values to hidden value.
+
+        :type decoding: function
+        :param decoding: activation function for converting linear combination of
+                         hidden units' values back to visible value.
         """
-        
+
         self.n_visible = n_visible
         self.n_hidden = n_hidden
+        self.coding = coding
+        self.decoding = decoding
         self.verbose = verbose
+
         if random_seed is not None: tf.set_random_seed(random_seed)
 
         if params is not None:
@@ -183,12 +195,12 @@ class Coder(object):
         return self.get_reconstructed_input(y)
 
 
-    def cost(self, inputs):
+    def cost(self, inputs, function=functions.cross_entropy):
         """
         Cost for given input batch of samples, under current params.
         Mean cross entropy between input and encode-decoded input.
         """
-        loss = functions.cross_entropy(inputs, self.recode(inputs))
+        loss = function(inputs, self.recode(inputs))
         return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1]))
 
 
@@ -232,8 +244,8 @@ class Auto(Coder):
         
     def get_hidden_values(self, inputs):
         """Computes the values of the hidden layer."""
-        return tf.sigmoid(tf.matmul(inputs, self.params['W']) +
-                          self.params['bhid'])
+        return self.coding(tf.matmul(inputs, self.params['W']) +
+                           self.params['bhid'])
 
 
     def get_reconstructed_input(self, hidden):
@@ -241,8 +253,8 @@ class Auto(Coder):
         Computes the reconstructed input given the values of the
         hidden layer.
         """
-        return tf.sigmoid(tf.matmul(hidden, self.params['W'], transpose_b=True) +
-                          self.params['bvis'])
+        return self.decoding(tf.matmul(hidden, self.params['W'], transpose_b=True) +
+                             self.params['bvis'])
 
 
     def features(self, *args):
@@ -304,7 +316,7 @@ class Conv(Coder):
     """
     
     param_names = ['W', 'bhid', 'bvis']
-    attr_names = Coder.attr_names + ['shapes']
+    attr_names = Coder.attr_names + ['shapes', 'strides']
 
     @staticmethod
     def prep_mnist(data):
@@ -315,7 +327,7 @@ class Conv(Coder):
         return data.reshape((-1, 28, 28, 1)).swapaxes(1, 2)
 
 
-    def __init__(self, input_shape=[28, 28], kernel_shape=[5, 5],
+    def __init__(self, input_shape=[28, 28], kernel_shape=[5, 5], strides=[1, 1],
                  batch_size=100, **kwargs):
         """
         input_shape, kernel_shape:
@@ -331,6 +343,7 @@ class Conv(Coder):
         
         self.batch_size = batch_size
         if not kwargs.get('fromfile'):
+            self.strides = strides
             self.shapes = [input_shape, kernel_shape]
             kwargs['n_visible'] = np.prod(input_shape)
         Coder.__init__(self, **kwargs)
@@ -359,8 +372,9 @@ class Conv(Coder):
     def get_hidden_values(self, inputs):
 
         h_conv = tf.nn.conv2d(inputs, self.params['W'],
-                              strides=[1, 1, 1, 1], padding='VALID')
-        return tf.sigmoid(h_conv + self.params['bhid'])
+                              strides=[1] + self.strides + [1],
+                              padding='VALID')
+        return self.coding(h_conv + self.params['bhid'])
 
 
     def get_reconstructed_input(self, hidden):
@@ -370,17 +384,18 @@ class Conv(Coder):
         
         shape = [batch_size] + self.shapes[0] + [1]
         outputs = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
-                                         [1, 1, 1, 1], padding='VALID')
+                                         [1] + self.strides + [1],
+                                         padding='VALID')
         
-        return tf.sigmoid(outputs + self.params['bvis'])
+        return self.decoding(outputs + self.params['bvis'], 0.0, 1.0)
 
 
-    def cost(self, inputs):
+    def cost(self, inputs, function=functions.cross_entropy):
         """
         Cost for given input batch of samples, under current params.
         Mean cross entropy between input and encode-decoded input.
         """
-        loss = functions.cross_entropy(inputs, self.recode(inputs))
+        loss = function(inputs, self.recode(inputs))
         return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1, 2]))
 
 
@@ -536,7 +551,7 @@ class RBM(Auto):
         Return gradient of free energy w.r.t. each bit of sample.
         """
         wx_b = tf.matmul(inputs, self.params['W']) + self.params['bhid']
-        return -tf.matmul(tf.sigmoid(wx_b), self.params['W'], transpose_b=True)\
+        return -tf.matmul(self.coding(wx_b), self.params['W'], transpose_b=True)\
                - self.params['bvis']
 
 
@@ -789,16 +804,13 @@ class RNN(Coder):
         return data.reshape((-1, 28, 28)).swapaxes(1, 2)
 
     
-    def __init__(self, n_visible=28, n_hidden=100, seq_length=28,
-                 random_seed=123, fromfile=None, params=None, verbose=False):
+    def __init__(self, n_visible=28, n_hidden=100, seq_length=28, **kwargs):
         """
         seq_length is length of sequences used for training.
         """
                      
         self.seq_length = seq_length
-        Coder.__init__(self, n_visible=n_visible, n_hidden=n_hidden,
-                       random_seed=random_seed, fromfile=fromfile,
-                       params=params, verbose=verbose)
+        Coder.__init__(self, n_visible=n_visible, n_hidden=n_hidden, **kwargs)
 
     def init_params(self):
 
@@ -826,11 +838,11 @@ class RNN(Coder):
 
         operand = tf.matmul(inputs, self.params['Wxh']) + self.params['bhid']
         if states is not None: operand += tf.matmul(states, self.params['Whh'])
-        states = tf.sigmoid(operand)
-        outputs = tf.sigmoid(tf.matmul(states,
-                                       self.params.get('Why',
-                                            tf.transpose(self.params['Wxh']))) +
-                             self.params['bvis'])
+        states = self.coding(operand)
+        outputs = self.coding(tf.matmul(states,
+                                        self.params.get('Why',
+                                             tf.transpose(self.params['Wxh']))) +
+                              self.params['bvis'])
 
         return states, outputs
         
@@ -867,7 +879,7 @@ class RNN(Coder):
 
 
     def get_hidden_values(self, visible, states=None,
-                          presigmoid=False, as_list=False):
+                          precoding=False, as_list=False):
         """
         Given visible unit values, return expected hidden unit values.
         """
@@ -877,8 +889,8 @@ class RNN(Coder):
             operand = tf.matmul(row, self.params['Wxh']) + self.params['bhid']
             if states is not None:
                 operand += tf.matmul(states, self.params['Whh'])
-            hidden.append(operand if presigmoid else tf.sigmoid(operand))
-            states = tf.sigmoid(operand) if presigmoid else hidden[-1]
+            hidden.append(operand if precoding else self.coding(operand))
+            states = self.coding(operand) if precoding else hidden[-1]
 
         if as_list: return hidden
         
@@ -1037,9 +1049,9 @@ class VAE(Coder):
 
     def get_h_inputs(self, inputs):
         """Computes the values of the hidden layer, given inputs."""
-        return tf.sigmoid(tf.matmul(inputs, self.params['Wxh']) +
-                          self.params['bWxh'])
-
+        return self.coding(tf.matmul(inputs, self.params['Wxh']) +
+                           self.params['bWxh'])
+    
 
     def get_hidden_values(self, inputs):
         """Computes the values of the latent z variables."""
@@ -1049,7 +1061,7 @@ class VAE(Coder):
 
     def get_h_latents(self, latents):
         """Computes the values of the hidden layer, generative network."""
-        return tf.sigmoid(tf.matmul(latents, self.params['Wzh']) +
+        return self.coding(tf.matmul(latents, self.params['Wzh']) +
                           self.params['bWzh'])
 
 
@@ -1059,8 +1071,8 @@ class VAE(Coder):
         latent z variables.
         """
         h = self.get_h_latents(latents)
-        return tf.sigmoid(tf.matmul(h, self.params['Mhx']) +
-                          self.params['bMhx'])
+        return self.decoding(tf.matmul(h, self.params['Mhx']) +
+                             self.params['bMhx'])
 
 
     def cost(self, inputs, variation):
@@ -1076,7 +1088,7 @@ class VAE(Coder):
 
         z = z_mu + tf.sqrt(tf.exp(z_sig)) * variation
         h = self.get_h_latents(z)
-        x_mu = tf.sigmoid(tf.matmul(h, self.params['Mhx']) + self.params['bMhx'])
+        x_mu = self.decoding(tf.matmul(h, self.params['Mhx']) + self.params['bMhx'])
         x_sig = tf.clip_by_value(x_mu * (1 - x_mu), .05, 1)
 
         # decoding likelihood term
