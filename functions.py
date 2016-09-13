@@ -12,7 +12,7 @@ the Free Software Foundation, either version 3 of the License, or
 import tensorflow as tf
 
 def cross_entropy(x, y, eps=1e-8):
-    return x * tf.log(y + eps) + (1 - x) * tf.log(1 - y + eps)
+    return -x * tf.log(y + eps) - (1 - x) * tf.log(1 - y + eps)
 
 
 def logit(data, eps=1e-8):
