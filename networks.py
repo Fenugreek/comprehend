@@ -42,7 +42,7 @@ class Coder(object):
 
     def __init__(self, n_visible=784, n_hidden=500, verbose=False,
                  random_seed=123, params=None, fromfile=None,
-                 coding=tf.sigmoid, decoding=tf.sigmoid, **kwargs):
+                 coding=tf.sigmoid, decoding=None, **kwargs):
         """
         Initialize the object by specifying the number of visible units (the
         dimension d of the input), the number of hidden units (the dimension
@@ -76,7 +76,7 @@ class Coder(object):
         self.n_visible = n_visible
         self.n_hidden = n_hidden
         self.coding = coding
-        self.decoding = decoding
+        self.decoding = coding if decoding is None else decoding
         self.verbose = verbose
 
         if random_seed is not None: tf.set_random_seed(random_seed)
@@ -201,7 +201,7 @@ class Coder(object):
         Mean cross entropy between input and encode-decoded input.
         """
         loss = function(inputs, self.recode(inputs))
-        return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1]))
+        return tf.reduce_mean(tf.reduce_sum(loss, reduction_indices=[1]))
 
 
     def rms_loss(self, inputs):
@@ -238,8 +238,8 @@ class Auto(Coder):
     def init_params(self, **kwargs):
 
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden, name='W')
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
-        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible]), name='bvis')
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bhid')
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt), name='bvis')
 
         
     def get_hidden_values(self, inputs):
@@ -295,7 +295,7 @@ class Denoising(Auto):
         version of the input.
         """
         loss = functions.cross_entropy(inputs, self.recode(corrupts))
-        return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1]))
+        return tf.reduce_mean(tf.reduce_sum(loss, reduction_indices=[1]))
 
 
     def cost_args(self, data):
@@ -316,7 +316,7 @@ class Conv(Coder):
     """
     
     param_names = ['W', 'bhid', 'bvis']
-    attr_names = Coder.attr_names + ['shapes', 'strides']
+    attr_names = Coder.attr_names + ['shapes', 'strides', 'padding']
 
     @staticmethod
     def prep_mnist(data):
@@ -327,8 +327,8 @@ class Conv(Coder):
         return data.reshape((-1, 28, 28, 1)).swapaxes(1, 2)
 
 
-    def __init__(self, input_shape=[28, 28], kernel_shape=[5, 5], strides=[1, 1],
-                 batch_size=100, **kwargs):
+    def __init__(self, input_shape=[28, 28, 1], kernel_shape=[5, 5, 1], strides=[1, 1],
+                 padding='SAME', batch_size=100, **kwargs):
         """
         input_shape, kernel_shape:
         (rows, columns) of input data and convolution kernel respectively.
@@ -346,48 +346,59 @@ class Conv(Coder):
             self.strides = strides
             self.shapes = [input_shape, kernel_shape]
             kwargs['n_visible'] = np.prod(input_shape)
+            self.padding = padding
+
         Coder.__init__(self, **kwargs)
 
+        # add default no. of channels, if unspecified
+        if len(self.shapes[0]) == 2: self.shapes[0].append(1)
+        if len(self.shapes[1]) == 2: self.shapes[1].append(self.shapes[0][2])
+        # also strides...
+        if len(self.strides) == 2: self.strides = [1] + self.strides + [1]
+        
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(float_dt,
-                                          shape=[None] + self.shapes[0] + [1])]
+                                          shape=[None] + self.shapes[0])]
 
 
     def init_params(self):
 
-        # Compute effective number of neurons per filter.
-        conv_out = np.prod([(i - k + 1) for i, k in zip(*self.shapes)])
+        i_shape, k_shape = self.shapes
+
+        # Compute effective number of neurons per filter. Ignores padding.
+        conv_out = i_shape[0] * i_shape[1]
         if hasattr(self, 'pool_side'): conv_out /= self.pool_side**2
         elif hasattr(self, 'pool_width'): conv_out /= self.pool_width
         
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
-                                       shape=self.shapes[1] + [1, self.n_hidden],
+                                       shape=k_shape + [self.n_hidden],
                                        name='W')
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
-        self.params['bvis'] = tf.Variable(tf.zeros(self.shapes[0] + [1]), name='bvis')
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
+                                          name='bhid')
+        self.params['bvis'] = tf.Variable(tf.zeros(i_shape, dtype=float_dt),
+                                          name='bvis')
 
 
     def get_hidden_values(self, inputs):
 
         h_conv = tf.nn.conv2d(inputs, self.params['W'],
-                              strides=[1] + self.strides + [1],
-                              padding='VALID')
+                              strides=self.strides, padding=self.padding)
         return self.coding(h_conv + self.params['bhid'])
 
 
     def get_reconstructed_input(self, hidden):
 
-        batch_size = hidden.get_shape()[0].value
-        if type(batch_size) != int: batch_size = self.batch_size
+#        The following handles varying batch_size; might impact performance.
+#        batch_size = hidden.get_shape()[0].value
+#        if type(batch_size) != int: batch_size = self.batch_size
         
-        shape = [batch_size] + self.shapes[0] + [1]
+        shape = [self.batch_size] + self.shapes[0]
         outputs = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
-                                         [1] + self.strides + [1],
-                                         padding='VALID')
+                                         self.strides, padding=self.padding)
         
-        return self.decoding(outputs + self.params['bvis'], 0.0, 1.0)
+        return self.decoding(outputs + self.params['bvis'])
 
 
     def cost(self, inputs, function=functions.cross_entropy):
@@ -396,7 +407,7 @@ class Conv(Coder):
         Mean cross entropy between input and encode-decoded input.
         """
         loss = function(inputs, self.recode(inputs))
-        return tf.reduce_mean(-tf.reduce_sum(loss, reduction_indices=[1, 2]))
+        return tf.reduce_mean(tf.reduce_sum(loss, reduction_indices=[1, 2]))
 
 
     def rms_loss(self, inputs):
@@ -408,7 +419,7 @@ class Conv(Coder):
 
 
     def features(self, *args):
-        """Return n_hidden number of kernels, rasterized one per row."""
+        """Return n_hidden number of kernel weights."""
         
         W = tf.transpose(tf.squeeze(self.params['W'], squeeze_dims=[2]))
         return W.eval()
@@ -435,8 +446,10 @@ class ConvMaxSquare(Conv):
             self.shapes.append([])
 
         # Pool shape
+        input_size = self.shapes[0] if self.padding == 'SAME' else \
+                     [self.shapes[0][i] - self.shapes[1][i] + 1 for i in range(2)]
         self.shapes[2] = [self.batch_size] + \
-                         [(self.shapes[0][i] - self.shapes[1][i] + 1) /
+                         [input_size[i] / self.strides[i+1] /
                           self.pool_side for i in range(2)] + \
                           [self.pool_side**2, self.n_hidden]
         self.zeros = tf.zeros(self.shapes[2], dtype=float_dt)
@@ -451,13 +464,25 @@ class ConvMaxSquare(Conv):
         self.zeros = tf.zeros(self.shapes[2], dtype=float_dt)
         
         
-    def get_hidden_values(self, input, reduced=False, store=False):
-
-        hidden = Conv.get_hidden_values(self, input)
+    def get_hidden_values(self, input, reduced=False, store=None):
+        """
+        Return hidden values after max pooling.
         
-        pool_shape = self.shapes[2]
+        reduced:
+        Values not maximal are set to 0 if reduced is False.
+        If reduced is True, values not maximal are omitted.
+
+        store:
+        If True, store locations of maximal values.
+        Necessary to reconstruct input if reduced is set to True.
+        Defaults to value of reduced.
+        """
+
+        if store is None: store = reduced
+        
+        hidden = Conv.get_hidden_values(self, input)
         pool = tf.reshape(tf.space_to_depth(hidden, self.pool_side),
-                          pool_shape)
+                          self.shapes[2])
 
         if reduced and not store: return tf.reduce_max(pool, 3)
                     
@@ -466,15 +491,30 @@ class ConvMaxSquare(Conv):
                              axis=3, on_value=True, off_value=False)
         if store: self.state['overlay'] = overlay
 
-        if reduced: return tf.reduce_max(pool, 3)
+        return tf.reduce_max(pool, 3) if reduced else \
+               self._pool_overlay(pool, overlay)
+
+
+    def _pool_overlay(self, pool, overlay):
         
         pool = tf.select(overlay, pool, self.zeros)
-        
+        pool_shape = self.shapes[2]        
         return tf.depth_to_space(tf.reshape(pool, pool_shape[:3] + \
                                     [pool_shape[3] * pool_shape[4]]),
                                  self.pool_side)
 
 
+    def get_reconstructed_input(self, hidden, reduced=False):
+
+        if not reduced: return Conv.get_reconstructed_input(self, hidden)
+
+        hidden = tf.tile(tf.expand_dims(hidden, 3),
+                         [1, 1, 1, self.pool_side**2, 1])
+        return Conv.get_reconstructed_input(self,
+                                            self._pool_overlay(hidden,
+                                                               self.state['overlay']))
+        
+        
     def dump_output(self, data, filename, kind='hidden', batch_size=None):
         """
         See documentation in parent class.
@@ -484,8 +524,8 @@ class ConvMaxSquare(Conv):
 
         Output is always computed via batch.
         """
-        save_file = open(filename, 'wb')
 
+        save_file = open(filename, 'wb')
 
         if kind == 'hidden':
             method = lambda x: self.get_hidden_values(x, reduced=True)
@@ -820,8 +860,10 @@ class RNN(Coder):
         if 'Why' in type(self).param_names:
             self.params['Why'] = xavier_init(self.n_hidden, self.n_visible, 'Why')
 
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden]), name='bhid')
-        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible]), name='bvis')
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
+                                          name='bhid')
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt),
+                                          name='bvis')
 
 
     def init_train_args(self, **kwargs):
@@ -1039,12 +1081,12 @@ class VAE(Coder):
         self.params['Mhx'] = xavier_init(self.n_hidden, self.n_visible,
                                          'Mhx', constant)
 
-        self.params['bWxh'] = tf.Variable(tf.zeros([self.n_hidden]), name='bWxh')
-        self.params['bMhz'] = tf.Variable(tf.zeros([self.n_z]), name='bMhz')
-        self.params['bShz'] = tf.Variable(tf.zeros([self.n_z]), name='bShz')
+        self.params['bWxh'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bWxh')
+        self.params['bMhz'] = tf.Variable(tf.zeros([self.n_z], dtype=float_dt), name='bMhz')
+        self.params['bShz'] = tf.Variable(tf.zeros([self.n_z], dtype=float_dt), name='bShz')
 
-        self.params['bWzh'] = tf.Variable(tf.zeros([self.n_hidden]), name='bWxh')
-        self.params['bMhx'] = tf.Variable(tf.zeros([self.n_visible]), name='bMhx')
+        self.params['bWzh'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bWxh')
+        self.params['bMhx'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt), name='bMhx')
 
 
     def get_h_inputs(self, inputs):
