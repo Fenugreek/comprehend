@@ -15,6 +15,7 @@ import numpy as np
 from numpy.random import randint
 
 import tensorflow as tf
+import functions
 
 def corrupt(dataset, corruption):
     """
@@ -33,25 +34,25 @@ def corrupt(dataset, corruption):
     return corrupted.reshape(dataset.shape)
 
 
-def get_costs(coder, dataset, batch_size=100):
+def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
     """
     Return average cost function value and rms-loss value on validation
     set by coder object with its current weights.
     """
     
     n_batches = dataset.shape[0] // batch_size
-    cost, rms_loss = 0, 0
+    cost, rms_loss = tf.constant(0.), tf.constant(0.)
     for index in range(n_batches):
         batch = dataset[index * batch_size : (index+1) * batch_size]
-        cost += coder.cost(*coder.cost_args(batch)).eval()
-        rms_loss += coder.rms_loss(batch).eval()
+        cost += coder.cost(*coder.cost_args(batch), function=costing)
+        rms_loss += coder.rms_loss(batch)
 
-    return (cost / n_batches, rms_loss / n_batches)
+    return (cost.eval() / n_batches, rms_loss.eval() / n_batches)
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
           training_epochs=10, learning_rate=0.001, batch_size=100,
-          corruption=None):
+          corruption=None, costing=functions.cross_entropy):
     """
     Train a networks object on given data.
 
@@ -65,11 +66,11 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     """
 
     train_step = tf.train.AdamOptimizer(learning_rate)\
-                     .minimize(coder.cost(*coder.train_args))
+                     .minimize(coder.cost(*coder.train_args, function=costing))
     sess.run(tf.initialize_all_variables())
 
     if verbose: print('Initial cost %.2f, r.m.s. loss %.3f' %
-                      get_costs(coder, validation_set, batch_size))
+                      get_costs(coder, validation_set, batch_size, costing))
     
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
@@ -78,7 +79,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             batch = dataset[index * batch_size : (index+1) * batch_size]
             train_step.run(feed_dict=coder.train_feed(batch))
 
-        if verbose: print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
-                          ((epoch,) + get_costs(coder, validation_set, batch_size)))
-
+        if verbose:
+            print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
+                  ((epoch,) + get_costs(coder, validation_set, batch_size, costing)))
 
