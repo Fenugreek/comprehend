@@ -69,7 +69,6 @@ def test_coder(coder, sample, corruption=.3, block_corruption=.2, random_seed=12
         return [(s, coder.recode(s[0], **kwargs).eval()) for s in sample]
     
     results = [(sample, coder.recode(sample, **kwargs).eval())]
-    size = len(sample[0])
     
     if corruption is not None:
         corrupted = train.corrupt(sample, corruption)
@@ -82,7 +81,7 @@ def test_coder(coder, sample, corruption=.3, block_corruption=.2, random_seed=12
     return results
     
 
-def mosaic(results, show=True, transpose=True):
+def mosaic(results, show=True, transpose=True, clip=False):
     """
     Convert output of test_coder() into a 2D image suitable for display.
     Returns the associated 2D array.
@@ -112,6 +111,7 @@ def mosaic(results, show=True, transpose=True):
         mosaic.append(np.concatenate(tiles))
 
     mosaic = np.concatenate(mosaic, axis=1)
+    if clip: mosaic = np.clip(mosaic, 0, 1)
 
     if show:
         pyplot.imshow(mosaic, interpolation='none')
