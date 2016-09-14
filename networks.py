@@ -132,7 +132,7 @@ class Coder(object):
         if not is_handle: save_file.close()    
 
         
-    def dump_output(self, data, filename, kind='hidden', batch_size=None):
+    def dump_output(self, data, filename, kind='hidden', batch_size=None, dtype=None):
         """
         Compute hidden/recode values for given input data, according to current
         weights of the network, and then write to disk.
@@ -158,10 +158,14 @@ class Coder(object):
         if batch_size:
             output = []
             for i in range(0, len(data), batch_size):
-                output.append(method(data[i:i+batch_size]).eval())
+                o = method(data[i:i+batch_size]).eval()
+                if dtype is not None: o = o.astype(dtype, copy=False)
+                output.append(o)
             output = np.concatenate(output)
-        else: output = method(data)
-        
+        else:
+            output = method(data)
+            if dtype is not None: output = output.astype(dtype, copy=False)
+            
         cPickle.dump(output, save_file, -1) 
         save_file.close()    
 
@@ -381,7 +385,11 @@ class Conv(Coder):
                                           name='bvis')
 
 
-    def get_hidden_values(self, inputs):
+    def set_batch_size(self, batch_size):
+        self.batch_size = batch_size
+
+
+    def get_hidden_values(self, inputs, **kwargs):
 
         h_conv = tf.nn.conv2d(inputs, self.params['W'],
                               strides=self.strides, padding=self.padding)
@@ -423,6 +431,33 @@ class Conv(Coder):
         
         W = tf.transpose(tf.squeeze(self.params['W'], squeeze_dims=[2]))
         return W.eval()
+
+
+    def dump_output(self, data, filename, kind='hidden', batch_size=None, dtype=None):
+        """
+        See documentation in parent class.
+        
+        Output is always computed via batch.
+        """
+
+        save_file = open(filename, 'wb')
+
+        if kind == 'hidden':
+            method = lambda x: self.get_hidden_values(x, reduced=True, store=False)
+        elif kind == 'recode':
+            method = lambda x: self.recode(x)
+        else: raise ValueError('Do not understand kind option: ' + kind)
+
+        self.set_batch_size(batch_size)        
+        output = []
+        for i in range(0, len(data) - batch_size + 1, batch_size):
+            o = method(data[i:i+batch_size]).eval()
+            if kind == 'hidden': o = o.reshape(batch_size, -1)
+            if dtype is not None: o = o.astype(dtype, copy=False)
+            output.append(o)
+        
+        cPickle.dump(np.concatenate(output), save_file, -1) 
+        save_file.close()    
 
 
 class ConvMaxSquare(Conv):
@@ -515,38 +550,6 @@ class ConvMaxSquare(Conv):
                                                                self.state['overlay']))
         
         
-    def dump_output(self, data, filename, kind='hidden', batch_size=None):
-        """
-        See documentation in parent class.
-        
-        Only difference is, batch_size if supplied must not be different from
-        self.batch_size, and is provided here only for backwards compatibility.
-
-        Output is always computed via batch.
-        """
-
-        save_file = open(filename, 'wb')
-
-        if kind == 'hidden':
-            method = lambda x: self.get_hidden_values(x, reduced=True)
-        elif kind == 'recode':
-            method = lambda x: self.recode(x)
-        else: raise ValueError('Do not understand kind option: ' + kind)
-
-        if batch_size and batch_size != self.batch_size:
-            print('Unsupported batch size %d using %d.',
-                  batch_size, self.batch_size)
-        batch_size = self.batch_size
-        
-        output = []
-        for i in range(0, len(data) - batch_size + 1, batch_size):
-            o = method(data[i:i+batch_size]).eval()
-            output.append(o.reshape(batch_size, -1) if kind == 'hidden' else o)
-        
-        cPickle.dump(np.concatenate(output), save_file, -1) 
-        save_file.close()    
-
-
 class RBM(Auto):
     """Restricted Boltzmann Machine. Adapted from deeplearning.net."""
 
