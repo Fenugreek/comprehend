@@ -21,7 +21,7 @@ from scipy.stats import multivariate_normal
 
 float_dt = tf.float32
 
-def xavier_init(fan_in, fan_out, name='W', constant=4, shape=None): 
+def xavier_init(fan_in, fan_out, name='W', constant=1, shape=None): 
     """
     Xavier initialization of network weights.
 
@@ -102,7 +102,9 @@ class Coder(object):
                 self.init_params(**kwargs)
             
         self.init_train_args(**kwargs)
-
+        if not hasattr(self, 'output_dims'):
+            self.output_dims = self.input_dims
+        
         
     def init_params(self, **kwargs):
         pass
@@ -111,8 +113,17 @@ class Coder(object):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(float_dt,
                                           shape=[None, self.n_visible])]
+        self.input_dims = 2
 
     
+    def input_shape(self):
+        return [getattr(self, 'batch_size', -1)] + [self.n_visible]
+
+
+    def output_shape(self, **kwargs):
+        return [getattr(self, 'batch_size', -1)] + [self.n_hidden]
+
+
     def save_params(self, tofile):
         """
         Save params to disk, compatible with fromfile option of constructor.
@@ -180,12 +191,12 @@ class Coder(object):
         return {self.train_args[0]: data}
 
 
-    def get_hidden_values(self, inputs):
+    def get_hidden_values(self, inputs, **kwargs):
         """Computes the values of the hidden layer."""
         return None #implement in subclass
     
         
-    def get_reconstructed_input(self, hidden):
+    def get_reconstructed_input(self, hidden, **kwargs):
         """
         Computes the reconstructed input given the values of the
         hidden layer.
@@ -205,7 +216,9 @@ class Coder(object):
         Mean cross entropy between input and encode-decoded input.
         """
         loss = function(inputs, self.recode(inputs))
-        return tf.reduce_mean(tf.reduce_sum(loss, reduction_indices=[1]))
+        return tf.reduce_mean(
+                        tf.reduce_sum(loss,
+                                      reduction_indices=range(1, self.input_dims)))
 
 
     def rms_loss(self, inputs):
@@ -213,8 +226,10 @@ class Coder(object):
         Root-mean-squared difference between <inputs> and encoded-decoded output.
         """
         loss = tf.squared_difference(inputs, self.recode(inputs))
-        return tf.reduce_mean(tf.reduce_mean(loss, reduction_indices=[1]) ** .5)
-        
+        return tf.reduce_mean(
+                        tf.reduce_mean(loss,
+                                       reduction_indices=range(1, self.input_dims)) ** .5)
+
 
 class Auto(Coder):
     """
@@ -246,13 +261,13 @@ class Auto(Coder):
         self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt), name='bvis')
 
         
-    def get_hidden_values(self, inputs):
+    def get_hidden_values(self, inputs, **kwargs):
         """Computes the values of the hidden layer."""
         return self.coding(tf.matmul(inputs, self.params['W']) +
                            self.params['bhid'])
 
 
-    def get_reconstructed_input(self, hidden):
+    def get_reconstructed_input(self, hidden, **kwargs):
         """
         Computes the reconstructed input given the values of the
         hidden layer.
@@ -299,7 +314,9 @@ class Denoising(Auto):
         version of the input.
         """
         loss = functions.cross_entropy(inputs, self.recode(corrupts))
-        return tf.reduce_mean(tf.reduce_sum(loss, reduction_indices=[1]))
+        return tf.reduce_mean(
+                        tf.reduce_sum(loss,
+                                      reduction_indices=range(1, self.input_dims)))
 
 
     def cost_args(self, data):
@@ -359,12 +376,23 @@ class Conv(Coder):
         if len(self.shapes[1]) == 2: self.shapes[1].append(self.shapes[0][2])
         # also strides...
         if len(self.strides) == 2: self.strides = [1] + self.strides + [1]
-        
+
+
+    def input_shape(self):
+        return [self.batch_size] + self.shapes[0]
+
+
+    def output_shape(self, **kwargs):
+        return [self.batch_size] + \
+               [self.shapes[0][i] / self.strides[i+1] for i in range(2)] + \
+               [self.n_hidden]
+               
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(float_dt,
                                           shape=[None] + self.shapes[0])]
+        self.input_dims = 4
 
 
     def init_params(self):
@@ -396,7 +424,7 @@ class Conv(Coder):
         return self.coding(h_conv + self.params['bhid'])
 
 
-    def get_reconstructed_input(self, hidden):
+    def get_reconstructed_input(self, hidden, **kwargs):
 
 #        The following handles varying batch_size; might impact performance.
 #        batch_size = hidden.get_shape()[0].value
@@ -407,23 +435,6 @@ class Conv(Coder):
                                          self.strides, padding=self.padding)
         
         return self.decoding(outputs + self.params['bvis'])
-
-
-    def cost(self, inputs, function=functions.cross_entropy):
-        """
-        Cost for given input batch of samples, under current params.
-        Mean cross entropy between input and encode-decoded input.
-        """
-        loss = function(inputs, self.recode(inputs))
-        return tf.reduce_mean(tf.reduce_sum(loss, reduction_indices=[1, 2]))
-
-
-    def rms_loss(self, inputs):
-        """
-        Root-mean-squared difference between <inputs> and encoded-decoded output.
-        """
-        loss = tf.squared_difference(inputs, self.recode(inputs))
-        return tf.reduce_mean(tf.reduce_mean(loss, reduction_indices=[1, 2]) ** .5)
 
 
     def features(self, *args):
@@ -497,8 +508,13 @@ class ConvMaxSquare(Conv):
         self.batch_size = batch_size
         self.shapes[2][0] = batch_size
         self.zeros = tf.zeros(self.shapes[2], dtype=float_dt)
-        
-        
+                
+
+    def output_shape(self, reduced=True):
+        if reduced: return self.shapes[2][:3] + [self.n_hidden]
+        else:       return Conv.output_shape(self)
+
+
     def get_hidden_values(self, input, reduced=False, store=None):
         """
         Return hidden values after max pooling.
@@ -576,6 +592,7 @@ class RBM(Auto):
                                           shape=[None, self.n_visible]),
                            tf.placeholder(float_dt,
                                           shape=[None, self.n_visible])]
+        self.input_dims = 2
 
 
     def free_energy(self, v):
@@ -785,6 +802,7 @@ class ERBM(RBM):
              tf.placeholder(float_dt, shape=[None, self.n_hidden]),
              tf.placeholder(float_dt, shape=[None, self.n_visible]),
              tf.placeholder(float_dt, shape=[None, self.n_hidden])]
+        self.input_dims = 2
 
 
     def cost(self, v, h, chain_v, chain_h):
@@ -873,6 +891,7 @@ class RNN(Coder):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(float_dt,
                                           shape=[None, self.n_visible, self.seq_length])]
+        self.input_dims = 2
 
 
     def update(self, states, inputs):
@@ -1098,7 +1117,7 @@ class VAE(Coder):
                            self.params['bWxh'])
     
 
-    def get_hidden_values(self, inputs):
+    def get_hidden_values(self, inputs, **kwargs):
         """Computes the values of the latent z variables."""
         h = self.get_h_inputs(inputs)
         return tf.matmul(h, self.params['Mhz']) + self.params['bMhz']
@@ -1110,7 +1129,7 @@ class VAE(Coder):
                           self.params['bWzh'])
 
 
-    def get_reconstructed_input(self, latents):
+    def get_reconstructed_input(self, latents, **kwargs):
         """
         Computes the reconstructed input given the values of the
         latent z variables.
