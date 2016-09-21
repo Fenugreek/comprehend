@@ -21,17 +21,18 @@ from scipy.stats import multivariate_normal
 
 float_dt = tf.float32
 
-def xavier_init(fan_in, fan_out, name='W', constant=1, shape=None): 
+def xavier_init(fan_in, fan_out, name='W', constant=1,
+                shape=None, trainable=True):
     """
     Xavier initialization of network weights.
 
     See https://stackoverflow.com/questions/33640581/how-to-do-xavier-initialization-on-tensorflow
     """
-    
     bound = constant * np.sqrt(6.0 / (fan_in + fan_out))
     return tf.Variable(tf.random_uniform((fan_in, fan_out) if shape is None else shape,
                                          minval=-bound, maxval=bound, 
-                                         dtype=float_dt, name=name))
+                                         dtype=float_dt, name=name),
+                       trainable=trainable)
 
 
 class Coder(object):
@@ -42,7 +43,7 @@ class Coder(object):
 
     def __init__(self, n_visible=784, n_hidden=500, verbose=False,
                  random_seed=123, params=None, fromfile=None,
-                 coding=tf.sigmoid, decoding=None, **kwargs):
+                 coding=tf.sigmoid, decoding=None, trainable=True, **kwargs):
         """
         Initialize the object by specifying the number of visible units (the
         dimension d of the input), the number of hidden units (the dimension
@@ -91,7 +92,7 @@ class Coder(object):
 
                 for name in type(self).param_names:
                     self.params[name] = tf.Variable(cPickle.load(save_file),
-                                                    name=name)
+                                                    name=name, trainable=trainable)
                 try:
                     for attr in type(self).attr_names:
                         setattr(self, attr, cPickle.load(save_file))
@@ -254,11 +255,14 @@ class Auto(Coder):
     param_names = ['W', 'bhid', 'bvis']
 
 
-    def init_params(self, **kwargs):
+    def init_params(self, trainable=True, **kwargs):
 
-        self.params['W'] = xavier_init(self.n_visible, self.n_hidden, name='W')
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bhid')
-        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt), name='bvis')
+        self.params['W'] = xavier_init(self.n_visible, self.n_hidden,
+                                       name='W', trainable=trainable)
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
+                                          name='bhid', trainable=trainable)
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt),
+                                          name='bvis', trainable=trainable)
 
         
     def get_hidden_values(self, inputs, **kwargs):
@@ -395,7 +399,7 @@ class Conv(Coder):
         self.input_dims = 4
 
 
-    def init_params(self):
+    def init_params(self, trainable=True):
 
         i_shape, k_shape = self.shapes
 
@@ -406,11 +410,11 @@ class Conv(Coder):
         
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
                                        shape=k_shape + [self.n_hidden],
-                                       name='W')
+                                       name='W', trainable=trainable)
         self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
-                                          name='bhid')
+                                          name='bhid', trainable=trainable)
         self.params['bvis'] = tf.Variable(tf.zeros(i_shape, dtype=float_dt),
-                                          name='bvis')
+                                          name='bvis', trainable=trainable)
 
 
     def set_batch_size(self, batch_size):
@@ -425,10 +429,6 @@ class Conv(Coder):
 
 
     def get_reconstructed_input(self, hidden, **kwargs):
-
-#        The following handles varying batch_size; might impact performance.
-#        batch_size = hidden.get_shape()[0].value
-#        if type(batch_size) != int: batch_size = self.batch_size
         
         shape = [self.batch_size] + self.shapes[0]
         outputs = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
@@ -440,11 +440,12 @@ class Conv(Coder):
     def features(self, *args):
         """Return n_hidden number of kernel weights."""
         
-        W = tf.transpose(tf.squeeze(self.params['W'], squeeze_dims=[2]))
+        W = tf.transpose(tf.squeeze(self.params['W']))
         return W.eval()
 
 
-    def dump_output(self, data, filename, kind='hidden', batch_size=None, dtype=None):
+    def dump_output(self, data, filename, kind='hidden',
+                    batch_size=None, dtype=None):
         """
         See documentation in parent class.
         
@@ -454,7 +455,8 @@ class Conv(Coder):
         save_file = open(filename, 'wb')
 
         if kind == 'hidden':
-            method = lambda x: self.get_hidden_values(x, reduced=True, store=False)
+            method = lambda x: \
+                         self.get_hidden_values(x, reduced=True, store=False)
         elif kind == 'recode':
             method = lambda x: self.recode(x)
         else: raise ValueError('Do not understand kind option: ' + kind)
@@ -873,18 +875,21 @@ class RNN(Coder):
         self.seq_length = seq_length
         Coder.__init__(self, n_visible=n_visible, n_hidden=n_hidden, **kwargs)
 
-    def init_params(self):
+    def init_params(self, trainable=True):
 
-        self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden, 'Wxh')
-        self.params['Whh'] = xavier_init(self.n_hidden, self.n_hidden, 'Whh')
+        self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden,
+                                         name='Wxh', trainable=trainable)
+        self.params['Whh'] = xavier_init(self.n_hidden, self.n_hidden,
+                                         name='Whh', trainable=trainable)
 
         if 'Why' in type(self).param_names:
-            self.params['Why'] = xavier_init(self.n_hidden, self.n_visible, 'Why')
+            self.params['Why'] = xavier_init(self.n_hidden, self.n_visible,
+                                             name='Why', trainable=trainable)
 
         self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
-                                          name='bhid')
+                                          name='bhid', trainable=trainable)
         self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt),
-                                          name='bvis')
+                                          name='bvis', trainable=trainable)
 
 
     def init_train_args(self, **kwargs):
@@ -1066,120 +1071,5 @@ class RNN(Coder):
 class RNNtie(RNN):
     """Recurrent neural network with tied weights."""
     param_names = ['Wxh', 'Whh', 'bhid', 'bvis']
-
-
-
-class VAE(Coder):
-    """Variational Autoencoder."""
-    
-    param_names = ['Wxh', 'Mhz', 'Shz', 'Wzh', 'Mhx',
-                   'bWxh', 'bMhz', 'bShz', 'bWzh', 'bMhx']
-
-    def __init__(self, n_z=100, **kwargs):
-        """
-        n_z:
-        Dimension of latent variables.
-        """
-        
-        self.n_z = n_z
-        Coder.__init__(self, **kwargs)
-
-        # Train args has an additional element: sampling from latent space
-        self.train_args.append(tf.placeholder(float_dt,
-                                              shape=[None, self.n_z]))
-
-
-    def init_params(self, constant=1):
-
-        self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden,
-                                         'Wxh', constant)
-        self.params['Mhz'] = xavier_init(self.n_hidden, self.n_z,
-                                         'Mhz', constant)
-        self.params['Shz'] = xavier_init(self.n_hidden, self.n_z,
-                                         'Shz', constant)
-
-        self.params['Wzh'] = xavier_init(self.n_z, self.n_hidden,
-                                         'Wzh', constant)
-        self.params['Mhx'] = xavier_init(self.n_hidden, self.n_visible,
-                                         'Mhx', constant)
-
-        self.params['bWxh'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bWxh')
-        self.params['bMhz'] = tf.Variable(tf.zeros([self.n_z], dtype=float_dt), name='bMhz')
-        self.params['bShz'] = tf.Variable(tf.zeros([self.n_z], dtype=float_dt), name='bShz')
-
-        self.params['bWzh'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bWxh')
-        self.params['bMhx'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt), name='bMhx')
-
-
-    def get_h_inputs(self, inputs):
-        """Computes the values of the hidden layer, given inputs."""
-        return self.coding(tf.matmul(inputs, self.params['Wxh']) +
-                           self.params['bWxh'])
-    
-
-    def get_hidden_values(self, inputs, **kwargs):
-        """Computes the values of the latent z variables."""
-        h = self.get_h_inputs(inputs)
-        return tf.matmul(h, self.params['Mhz']) + self.params['bMhz']
-
-
-    def get_h_latents(self, latents):
-        """Computes the values of the hidden layer, generative network."""
-        return self.coding(tf.matmul(latents, self.params['Wzh']) +
-                          self.params['bWzh'])
-
-
-    def get_reconstructed_input(self, latents, **kwargs):
-        """
-        Computes the reconstructed input given the values of the
-        latent z variables.
-        """
-        h = self.get_h_latents(latents)
-        return self.decoding(tf.matmul(h, self.params['Mhx']) +
-                             self.params['bMhx'])
-
-
-    def cost(self, inputs, variation):
-        """
-        Cost for given input batch of samples, under current params.
-        """
-        h = self.get_h_inputs(inputs)
-        z_mu = tf.matmul(h, self.params['Mhz']) + self.params['bMhz']
-        z_sig = tf.matmul(h, self.params['Shz']) + self.params['bShz']
-
-        # KL divergence between latent space induced by encoder and ...
-        lat_loss = -tf.reduce_sum(1 + z_sig - z_mu**2 - tf.exp(z_sig), 1)
-
-        z = z_mu + tf.sqrt(tf.exp(z_sig)) * variation
-        h = self.get_h_latents(z)
-        x_mu = self.decoding(tf.matmul(h, self.params['Mhx']) + self.params['bMhx'])
-        x_sig = tf.clip_by_value(x_mu * (1 - x_mu), .05, 1)
-
-        # decoding likelihood term
-        like_loss = tf.reduce_sum(tf.log(x_sig) +
-                                  (inputs - x_mu)**2 / x_sig, 1)
-
-#        # Mean cross entropy between input and encode-decoded input.
-#        like_loss = -2 * tf.reduce_sum(functions.cross_entropy(inputs, x_mu), 1)
-        
-        return .5 * tf.reduce_mean(like_loss + lat_loss)
-
-
-    def train_feed(self, data):
-        """Return feed_dict based on data to be used for training."""
-
-        return {self.train_args[0]: data,
-                self.train_args[1]: randn(data.shape[0], self.n_z)}
-
-
-    def cost_args(self, data):
-        """Return args to self.cost() for given dataset."""
-
-        return [data, randn(data.shape[0], self.n_z)]
-
-
-    def features(self, *args):
-        """Return weights in suitable manner for plotting."""
-        return self.params['Wxh'].eval().T
 
 
