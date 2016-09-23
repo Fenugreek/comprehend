@@ -17,6 +17,7 @@ from collections import OrderedDict
 
 import functions, train
 from tamarind.functions import sigmoid, unit_scale, logit
+import tamarind.stats
 from scipy.stats import multivariate_normal
 
 float_dt = tf.float32
@@ -106,7 +107,7 @@ class Coder(object):
         if not hasattr(self, 'output_dims'):
             self.output_dims = self.input_dims
         
-        
+
     def init_params(self, **kwargs):
         pass
 
@@ -143,8 +144,18 @@ class Coder(object):
 
         if not is_handle: save_file.close()    
 
-        
-    def dump_output(self, data, filename, kind='hidden', batch_size=None, dtype=None):
+
+    def _get_set_batch_size(self, batch_size=None):
+
+        if batch_size is None: 
+            if hasattr(self, 'batch_size'): return self.batch_size
+        elif hasattr(self, 'set_batch_size'):
+            self.set_batch_size(batch_size)
+            
+        return batch_size
+
+    def dump_output(self, data, filename, kind='hidden',
+                    batch_size=None, dtype=None):
         """
         Compute hidden/recode values for given input data, according to current
         weights of the network, and then write to disk.
@@ -152,35 +163,36 @@ class Coder(object):
         Useful to perform training on subsequent layer ('hidden'), or
         comparison of recoded input with original ('recode').
 
+        Output is computed one batch at a time, if batch_size is given or
+        self has attribute batch_size.
+
         kind:
         'hidden' or 'recode'.
         Values of hidden units, or reconstructed visible units
-
+        
         batch_size:
-        Compute hidden values for these many rows at a time, to save memory.
+        Compute values for these many rows at a time, to save memory,
+        saving results one batch at a time.
+        If <self> has <batch_size> as an attribute, that is used by default.
         """
+        
         save_file = open(filename, 'wb')
+        batch_size = self._get_set_batch_size(batch_size) or len(data)
 
         if kind == 'hidden':
-            method = lambda x: self.get_hidden_values(x)
+            method = lambda x: \
+                         self.get_hidden_values(x, reduced=True, store=False)
         elif kind == 'recode':
             method = lambda x: self.recode(x)
         else: raise ValueError('Do not understand kind option: ' + kind)
-        
-        if batch_size:
-            output = []
-            for i in range(0, len(data), batch_size):
-                o = method(data[i:i+batch_size]).eval()
-                if dtype is not None: o = o.astype(dtype, copy=False)
-                output.append(o)
-            output = np.concatenate(output)
-        else:
-            output = method(data)
-            if dtype is not None: output = output.astype(dtype, copy=False)
-            
-        cPickle.dump(output, save_file, -1) 
+                
+        for i in range(0, len(data) - batch_size + 1, batch_size):
+            values = method(data[i:i+batch_size]).eval()
+            if dtype is not None: values = values.astype(dtype, copy=False)
+            cPickle.dump(values, save_file, -1)
+                       
         save_file.close()    
-
+        
 
     def cost_args(self, dataset):
         """Return args to self.cost() for given dataset."""
@@ -444,35 +456,6 @@ class Conv(Coder):
         return W.eval()
 
 
-    def dump_output(self, data, filename, kind='hidden',
-                    batch_size=None, dtype=None):
-        """
-        See documentation in parent class.
-        
-        Output is always computed via batch.
-        """
-
-        save_file = open(filename, 'wb')
-
-        if kind == 'hidden':
-            method = lambda x: \
-                         self.get_hidden_values(x, reduced=True, store=False)
-        elif kind == 'recode':
-            method = lambda x: self.recode(x)
-        else: raise ValueError('Do not understand kind option: ' + kind)
-
-        self.set_batch_size(batch_size)        
-        output = []
-        for i in range(0, len(data) - batch_size + 1, batch_size):
-            o = method(data[i:i+batch_size]).eval()
-            if kind == 'hidden': o = o.reshape(batch_size, -1)
-            if dtype is not None: o = o.astype(dtype, copy=False)
-            output.append(o)
-        
-        cPickle.dump(np.concatenate(output), save_file, -1) 
-        save_file.close()    
-
-
 class ConvMaxSquare(Conv):
     """
     Convolutional Auto-Encoder with max pooling, on non-overlapping
@@ -517,7 +500,7 @@ class ConvMaxSquare(Conv):
         else:       return Conv.output_shape(self)
 
 
-    def get_hidden_values(self, input, reduced=False, store=None):
+    def get_hidden_values(self, input, reduced=False, store=None, **kwargs):
         """
         Return hidden values after max pooling.
         
@@ -948,7 +931,7 @@ class RNN(Coder):
 
 
     def get_hidden_values(self, visible, states=None,
-                          precoding=False, as_list=False):
+                          precoding=False, as_list=False, **kwargs):
         """
         Given visible unit values, return expected hidden unit values.
         """
