@@ -17,7 +17,6 @@ from collections import OrderedDict
 
 import functions, train
 from tamarind.functions import sigmoid, unit_scale, logit
-import tamarind.stats
 from scipy.stats import multivariate_normal
 
 float_dt = tf.float32
