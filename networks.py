@@ -15,14 +15,13 @@ from numpy.random import randint, random_sample, randn
 import cPickle
 from collections import OrderedDict
 
-import functions, train
 from tamarind.functions import sigmoid, unit_scale, logit
-from scipy.stats import multivariate_normal
+import functions, train
 
 float_dt = tf.float32
 
 def xavier_init(fan_in, fan_out, name='W', constant=1,
-                shape=None, trainable=True):
+                shape=None, trainable=True, dtype=float_dt):
     """
     Xavier initialization of network weights.
 
@@ -31,7 +30,7 @@ def xavier_init(fan_in, fan_out, name='W', constant=1,
     bound = constant * np.sqrt(6.0 / (fan_in + fan_out))
     return tf.Variable(tf.random_uniform((fan_in, fan_out) if shape is None else shape,
                                          minval=-bound, maxval=bound, 
-                                         dtype=float_dt, name=name),
+                                         dtype=dtype, name=name),
                        trainable=trainable)
 
 
@@ -42,7 +41,7 @@ class Coder(object):
     attr_names = ['n_visible', 'n_hidden']
 
     def __init__(self, n_visible=784, n_hidden=500, verbose=False,
-                 random_seed=123, params=None, fromfile=None,
+                 random_seed=123, params=None, fromfile=None, dtype=float_dt,
                  coding=tf.sigmoid, decoding=None, trainable=True, **kwargs):
         """
         Initialize the object by specifying the number of visible units (the
@@ -79,6 +78,7 @@ class Coder(object):
         self.coding = coding
         self.decoding = coding if decoding is None else decoding
         self.verbose = verbose
+        self.dtype = dtype
 
         if random_seed is not None: tf.set_random_seed(random_seed)
 
@@ -112,7 +112,7 @@ class Coder(object):
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
-        self.train_args = [tf.placeholder(float_dt,
+        self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible])]
         self.input_dims = 2
 
@@ -269,10 +269,10 @@ class Auto(Coder):
     def init_params(self, trainable=True, **kwargs):
 
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden,
-                                       name='W', trainable=trainable)
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
+                                       name='W', trainable=trainable, dtype=self.dtype)
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=self.dtype),
                                           name='bhid', trainable=trainable)
-        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt),
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=self.dtype),
                                           name='bvis', trainable=trainable)
 
         
@@ -318,7 +318,7 @@ class Denoising(Auto):
 
         # Train args has an additional element:
         #   the corrupted version of the input.
-        self.train_args.append(tf.placeholder(float_dt,
+        self.train_args.append(tf.placeholder(self.dtype,
                                               shape=[None, self.n_visible]))
         
 
@@ -405,7 +405,7 @@ class Conv(Coder):
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
-        self.train_args = [tf.placeholder(float_dt,
+        self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None] + self.shapes[0])]
         self.input_dims = 4
 
@@ -421,10 +421,10 @@ class Conv(Coder):
         
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
                                        shape=k_shape + [self.n_hidden],
-                                       name='W', trainable=trainable)
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
+                                       name='W', trainable=trainable, dtype=self.dtype)
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=self.dtype),
                                           name='bhid', trainable=trainable)
-        self.params['bvis'] = tf.Variable(tf.zeros(i_shape, dtype=float_dt),
+        self.params['bvis'] = tf.Variable(tf.zeros(i_shape, dtype=self.dtype),
                                           name='bvis', trainable=trainable)
 
 
@@ -482,7 +482,7 @@ class ConvMaxSquare(Conv):
                          [input_size[i] / self.strides[i+1] /
                           self.pool_side for i in range(2)] + \
                           [self.pool_side**2, self.n_hidden]
-        self.zeros = tf.zeros(self.shapes[2], dtype=float_dt)
+        self.zeros = tf.zeros(self.shapes[2], dtype=self.dtype)
         self.state = {}
 
 
@@ -491,7 +491,7 @@ class ConvMaxSquare(Conv):
         if self.batch_size == batch_size: return
         self.batch_size = batch_size
         self.shapes[2][0] = batch_size
-        self.zeros = tf.zeros(self.shapes[2], dtype=float_dt)
+        self.zeros = tf.zeros(self.shapes[2], dtype=self.dtype)
                 
 
     def output_shape(self, reduced=True):
@@ -572,9 +572,9 @@ class RBM(Auto):
         
 
     def init_train_args(self, **kwargs):
-        self.train_args = [tf.placeholder(float_dt,
+        self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible]),
-                           tf.placeholder(float_dt,
+                           tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible])]
         self.input_dims = 2
 
@@ -782,10 +782,10 @@ class ERBM(RBM):
         so flatten the two sets into a simple list.
         """
         self.train_args = \
-            [tf.placeholder(float_dt, shape=[None, self.n_visible]),
-             tf.placeholder(float_dt, shape=[None, self.n_hidden]),
-             tf.placeholder(float_dt, shape=[None, self.n_visible]),
-             tf.placeholder(float_dt, shape=[None, self.n_hidden])]
+            [tf.placeholder(self.dtype, shape=[None, self.n_visible]),
+             tf.placeholder(self.dtype, shape=[None, self.n_hidden]),
+             tf.placeholder(self.dtype, shape=[None, self.n_visible]),
+             tf.placeholder(self.dtype, shape=[None, self.n_hidden])]
         self.input_dims = 2
 
 
@@ -860,23 +860,23 @@ class RNN(Coder):
     def init_params(self, trainable=True):
 
         self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden,
-                                         name='Wxh', trainable=trainable)
+                                         name='Wxh', trainable=trainable, dtype=self.dtype)
         self.params['Whh'] = xavier_init(self.n_hidden, self.n_hidden,
-                                         name='Whh', trainable=trainable)
+                                         name='Whh', trainable=trainable, dtype=self.dtype)
 
         if 'Why' in type(self).param_names:
             self.params['Why'] = xavier_init(self.n_hidden, self.n_visible,
-                                             name='Why', trainable=trainable)
+                                             name='Why', trainable=trainable, dtype=self.dtype)
 
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt),
+        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=self.dtype),
                                           name='bhid', trainable=trainable)
-        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt),
+        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=self.dtype),
                                           name='bvis', trainable=trainable)
 
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
-        self.train_args = [tf.placeholder(float_dt,
+        self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible, self.seq_length])]
         self.input_dims = 2
 

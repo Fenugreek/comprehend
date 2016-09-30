@@ -9,7 +9,6 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 """
 from __future__ import division
-#from __future__ import print_function
 
 import numpy as np
 from numpy.random import randint
@@ -41,7 +40,8 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
     """
     
     n_batches = dataset.shape[0] // batch_size
-    cost, rms_loss = tf.constant(0.), tf.constant(0.)
+    cost, rms_loss = tf.constant(0., dtype=coder.dtype), \
+                     tf.constant(0., dtype=coder.dtype)
     for index in range(n_batches):
         batch = dataset[index * batch_size : (index+1) * batch_size]
         cost += coder.cost(*coder.cost_args(batch), function=costing)
