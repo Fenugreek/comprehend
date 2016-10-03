@@ -10,6 +10,7 @@ the Free Software Foundation, either version 3 of the License, or
 """
 from __future__ import print_function
 import tensorflow as tf
+from tensorflow.python.ops import array_ops
 import numpy as np
 from numpy.random import randint, random_sample, randn
 import cPickle
@@ -398,9 +399,12 @@ class Conv(Coder):
 
 
     def output_shape(self, **kwargs):
-        return [self.batch_size] + \
-               [self.shapes[0][i] / self.strides[i+1] for i in range(2)] + \
-               [self.n_hidden]
+        if self.padding == 'SAME':
+            dims = [self.shapes[0][i] / self.strides[i+1] for i in range(2)]
+        elif self.padding == 'VALID':
+            dims = [1 + (self.shapes[0][i] - self.shapes[1][i]) / self.strides[i+1]
+                    for i in range(2)]
+        return [self.batch_size] + dims + [self.n_hidden]
                
 
     def init_train_args(self, **kwargs):
@@ -453,6 +457,83 @@ class Conv(Coder):
         
         W = tf.transpose(tf.squeeze(self.params['W']))
         return W.eval()
+
+
+class Atrous(Conv):
+    """
+    Convolutional Auto-Encoder where kernels have holes.
+    i.e. Atrous convolution layer.
+    """
+    attr_names = Conv.attr_names + ['rate']
+
+    def __init__(self, rate=2, **kwargs):
+        """
+        rate:
+        Number of holes between kernel weights.
+        """
+
+        Conv.__init__(self, **kwargs)
+        if not kwargs.get('fromfile'): self.rate = rate
+        else: rate = self.rate
+        
+        # Taken from tensorflow/nn_ops.py: atrous_conv2d()
+        # Need this to do the transpose for get_constructed_input(),
+        # because there's no atrous_conv2d_transpose() yet.
+        if self.padding == "SAME":
+            filter_shape = self.shapes[1] + [self.n_hidden]
+            filter_height, filter_width = filter_shape[0], filter_shape[1]
+            filter_height_up = filter_height + (filter_height - 1) * (rate - 1)
+            filter_width_up = filter_width + (filter_width - 1) * (rate - 1)
+
+            pad_height = filter_height_up - 1
+            pad_width = filter_width_up - 1
+            pad_top = pad_height // 2
+            pad_bottom = pad_height - pad_top
+            pad_left = pad_width // 2
+            pad_right = pad_width - pad_left
+        elif self.padding == "VALID":
+            pad_top, pad_bottom, pad_left, pad_right = 0, 0, 0, 0
+
+        value_shape = [self.batch_size] + self.shapes[0]
+        in_height = value_shape[1] + pad_top + pad_bottom
+        in_width = value_shape[2] + pad_left + pad_right
+        pad_bottom_extra = (rate - in_height % rate) % rate
+        pad_right_extra = (rate - in_width % rate) % rate
+
+        space_to_batch_pad = [[pad_top, pad_bottom + pad_bottom_extra],
+                              [pad_left, pad_right + pad_right_extra]]
+        batch_to_space_crop = [[0, pad_bottom_extra], [0, pad_right_extra]]
+        self.shapes.append(space_to_batch_pad)
+        self.shapes.append(batch_to_space_crop)
+
+
+    def get_hidden_values(self, value, **kwargs):
+
+        value = tf.nn.atrous_conv2d(value, self.params['W'],
+                                    rate=self.rate, padding=self.padding)
+        return self.coding(value + self.params['bhid'])
+
+
+    def get_reconstructed_input(self, value, **kwargs):
+
+        value = array_ops.space_to_batch(input=value,
+                                         paddings=self.shapes[3],
+                                         block_size=self.rate)
+
+        shape = [self.batch_size * self.rate**2,
+                 # Not sure how the latter two actually work...
+                 self.shapes[0][0] / self.rate + self.shapes[2][0][1],
+                 self.shapes[0][1] / self.rate + self.shapes[2][1][1],
+                 self.shapes[0][2]]
+                 
+        value = tf.nn.conv2d_transpose(value, self.params['W'],
+                                       shape, [1, 1, 1, 1], padding='VALID')
+        
+        value = array_ops.batch_to_space(input=value,
+                                         crops=self.shapes[2],
+                                         block_size=self.rate)
+        
+        return self.decoding(value + self.params['bvis'])
 
 
 class ConvMaxSquare(Conv):
