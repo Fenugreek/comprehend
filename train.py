@@ -40,14 +40,16 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
     """
     
     n_batches = dataset.shape[0] // batch_size
-    cost, rms_loss = tf.constant(0., dtype=coder.dtype), \
-                     tf.constant(0., dtype=coder.dtype)
+#    rms_loss = tf.constant(0., dtype=coder.dtype)
+#    cost = tf.constant(0., dtype=coder.dtype)
+    rms_loss = 0
     for index in range(n_batches):
         batch = dataset[index * batch_size : (index+1) * batch_size]
-        cost += coder.cost(*coder.cost_args(batch), function=costing)
-        rms_loss += coder.rms_loss(batch)
+#        cost += coder.cost(*coder.cost_args(batch), function=costing)
+        rms_loss += coder.rms_loss(batch).eval()
 
-    return (cost.eval() / n_batches, rms_loss.eval() / n_batches)
+    return rms_loss / n_batches#, cost.eval() / n_batches
+
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
@@ -69,7 +71,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
                      .minimize(coder.cost(*coder.train_args, function=costing))
     sess.run(tf.initialize_all_variables())
 
-    if verbose: print('Initial cost %.2f, r.m.s. loss %.3f' %
+    if verbose: print('Initial r.m.s. loss %.3f' %
                       get_costs(coder, validation_set, batch_size, costing))
     
     n_train_batches = dataset.shape[0] // batch_size
@@ -80,6 +82,6 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             train_step.run(feed_dict=coder.train_feed(batch))
 
         if verbose:
-            print('Training epoch %d, cost %.2f, r.m.s. loss %.3f ' %
-                  ((epoch,) + get_costs(coder, validation_set, batch_size, costing)))
+            print('Training epoch %d r.m.s. loss %.3f ' %
+                  (epoch, get_costs(coder, validation_set, batch_size, costing)))
 
