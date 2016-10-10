@@ -40,21 +40,45 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
     """
     
     n_batches = dataset.shape[0] // batch_size
-#    rms_loss = tf.constant(0., dtype=coder.dtype)
-#    cost = tf.constant(0., dtype=coder.dtype)
     rms_loss = 0
+    cost = 0
     for index in range(n_batches):
         batch = dataset[index * batch_size : (index+1) * batch_size]
-#        cost += coder.cost(*coder.cost_args(batch), function=costing)
         rms_loss += coder.rms_loss(batch).eval()
+        if costing != tf.squared_difference:
+            cost += coder.cost(*coder.cost_args(batch), function=costing).eval()
+    if costing == tf.squared_difference: cost = rms_loss
+    
+    return (cost / n_batches, rms_loss / n_batches)
 
-    return rms_loss / n_batches#, cost.eval() / n_batches
 
+def get_label_costs(coder, dataset, labels, batch_size=100):
+    """
+    Return average cost function value and class error rate
+    dataset by coder object with its current weights.
+    """
+    
+    n_batches = dataset.shape[0] // batch_size
+    error = 0.
+    cost = 0.
+    for index in range(n_batches):
+        batch = dataset[index * batch_size : (index+1) * batch_size]
+        labels_batch = labels[index * batch_size : (index+1) * batch_size]
+        predicted = coder.get_hidden_values(batch)
+        
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(predicted,
+                                                              labels_batch)
+        cost += tf.reduce_mean(loss).eval()
+
+        bad_prediction = tf.not_equal(tf.argmax(predicted , 1), labels_batch)
+        error += tf.reduce_mean(tf.cast(bad_prediction, tf.float32)).eval()
+    
+    return (cost / n_batches, error / n_batches)
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
           training_epochs=10, learning_rate=0.001, batch_size=100,
-          corruption=None, costing=functions.cross_entropy):
+          costing=functions.cross_entropy):
     """
     Train a networks object on given data.
 
@@ -71,8 +95,8 @@ def train(sess, coder, dataset, validation_set, verbose=False,
                      .minimize(coder.cost(*coder.train_args, function=costing))
     sess.run(tf.initialize_all_variables())
 
-    if verbose: print('Initial r.m.s. loss %.3f' %
-                      get_costs(coder, validation_set, batch_size, costing))
+#    if verbose: print('Initial cost %5.1f r.m.s. loss %.3f' %
+#                      get_costs(coder, validation_set, batch_size, costing))
     
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
@@ -82,6 +106,41 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             train_step.run(feed_dict=coder.train_feed(batch))
 
         if verbose:
-            print('Training epoch %d r.m.s. loss %.3f ' %
-                  (epoch, get_costs(coder, validation_set, batch_size, costing)))
+            print('Training epoch %d cost %5.1f r.m.s. loss %.3f ' %
+                  ((epoch,) + get_costs(coder, validation_set, batch_size, costing)))
 
+
+def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
+                verbose=False, training_epochs=10, learning_rate=0.001,
+                batch_size=100):
+    """
+    Train a networks object on given data for classification.
+
+    sess: TensorFlow session.
+
+    coder: networks object that supports cost() and rms_loss() methods.
+
+    dataset, labels: dataset for training, with associated labels.
+
+    valid_set, valid_labels: dataset for monitoring, with associated labels.
+    """
+
+    train_args = coder.train_args + [tf.placeholder(tf.int32, shape=[None])]
+    train_step = tf.train.AdamOptimizer(learning_rate)\
+                     .minimize(coder.label_cost(*train_args))
+    sess.run(tf.initialize_all_variables())
+    
+    n_train_batches = dataset.shape[0] // batch_size
+    for epoch in range(training_epochs):
+
+        for index in range(n_train_batches):
+            train_feed = coder.train_feed(dataset[index * batch_size :
+                                                  (index+1) * batch_size])
+            train_feed[train_args[-1]] = labels[index * batch_size :
+                                                (index+1) * batch_size]
+            train_step.run(feed_dict=train_feed)
+
+        if verbose:
+            print('Training epoch %d cost %5.2f error rate %.3f ' %
+                  ((epoch,) + get_label_costs(coder, valid_set, valid_labels,
+                                              batch_size)))
