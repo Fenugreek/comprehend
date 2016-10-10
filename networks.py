@@ -236,8 +236,8 @@ class Coder(object):
 
     def label_cost(self, inputs, labels):
         """
-        Cost for given input batch of samples, under current params.
-        Mean cross entropy between class probabilities.
+        For classification problems, mean cross entropy between class probabilities.
+        i.e. Cost for given input batch of samples, under current params.
         """
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
             self.get_hidden_values(inputs), labels)
