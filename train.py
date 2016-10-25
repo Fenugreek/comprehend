@@ -95,8 +95,8 @@ def train(sess, coder, dataset, validation_set, verbose=False,
                      .minimize(coder.cost(*coder.train_args, function=costing))
     sess.run(tf.initialize_all_variables())
 
-#    if verbose: print('Initial cost %5.1f r.m.s. loss %.3f' %
-#                      get_costs(coder, validation_set, batch_size, costing))
+    if verbose: print('Initial cost %5.1f r.m.s. loss %.3f' %
+                      get_costs(coder, validation_set, batch_size, costing))
     
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
@@ -106,7 +106,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             train_step.run(feed_dict=coder.train_feed(batch))
 
         if verbose:
-            print('Training epoch %d cost %5.1f r.m.s. loss %.3f ' %
+            print('Training epoch %d cost %5.2f r.m.s. loss %.3f ' %
                   ((epoch,) + get_costs(coder, validation_set, batch_size, costing)))
 
 
@@ -129,7 +129,11 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
     train_step = tf.train.AdamOptimizer(learning_rate)\
                      .minimize(coder.label_cost(*train_args))
     sess.run(tf.initialize_all_variables())
-    
+
+    if verbose:
+        print('Initial cost %5.2f error rate %.3f ' %
+              get_label_costs(coder, valid_set, valid_labels, batch_size))
+
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
 
