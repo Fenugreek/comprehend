@@ -374,8 +374,9 @@ class Conv(Coder):
         return data.reshape((-1, 28, 28, 1)).swapaxes(1, 2)
 
 
-    def __init__(self, input_shape=[28, 28, 1], kernel_shape=[5, 5, 1], strides=[1, 1],
-                 padding='SAME', batch_size=100, coding=tf.nn.elu, **kwargs):
+    def __init__(self, input_shape=[28, 28, 1], kernel_shape=[5, 5, 1],
+                 strides=[1, 1], batch_size=100, coding=tf.nn.elu,
+                 padding='SAME', **kwargs):
         """
         input_shape, kernel_shape:
         (rows, columns) of input data and convolution kernel respectively.
@@ -569,6 +570,8 @@ class ConvMaxSquare(Conv):
 class RBM(Auto):
     """Restricted Boltzmann Machine. Adapted from deeplearning.net."""
 
+    attr_names = Auto.attr_names + ['CDk', 'persistent']
+
     def __init__(self, CDk=1, persistent=False, **kwargs):
         """
         CDk:
@@ -580,8 +583,9 @@ class RBM(Auto):
         """
         
         Auto.__init__(self, **kwargs)
-        self.CDk = CDk
-        self.persistent = persistent
+        if not kwargs.get('fromfile'):
+            self.CDk = CDk
+            self.persistent = persistent
 
         # Store end of the Gibbs chain here.
         self.chain_end = None
@@ -611,7 +615,7 @@ class RBM(Auto):
         Return gradient of free energy w.r.t. each bit of sample.
         """
         wx_b = tf.matmul(inputs, self.params['W']) + self.params['bhid']
-        return -tf.matmul(self.coding(wx_b), self.params['W'], transpose_b=True)\
+        return -tf.matmul(tf.sigmoid(wx_b), self.params['W'], transpose_b=True)\
                - self.params['bvis']
 
 
@@ -706,7 +710,7 @@ class RBM(Auto):
         return self.chain_end
     
 
-    def cost(self, inputs, chain_sample):
+    def cost(self, inputs, chain_sample, **kwargs):
         """
         Cost for given input batch of samples, under current params.
         Using free energy and contrastive divergence.
@@ -779,6 +783,46 @@ class RBM(Auto):
         # use existing end of persistent chain
         return [data, self.chain_end[0]]
 
+
+class RRBM(RBM):
+    """Real valued Rstricted Boltzmann Machine."""
+
+    attr_names = RBM.attr_names + ['sigma']
+
+    def __init__(self, sigma=0.26, **kwargs):
+        """
+        CDk:
+        Number of Gibbs sampling steps to use for contrastive divergence
+        when computing cost.
+
+        persistent:
+        Set to True to use persistend CD.
+        """
+        
+        RBM.__init__(self, **kwargs)
+        if sigma is not None: self.sigma = sigma
+        if self.sigma is None: raise AssertionError('Need to supply sigma param.')
+
+
+    def free_energy(self, v):
+        return RBM.free_energy(self, v) + \
+               .5 * tf.reduce_sum(v**2, reduction_indices=[1])
+
+
+    def sample_v_given_h(self, h, eps=1e-5):
+        
+        mean_v = sigmoid(np.dot(h, self.params['W'].eval().T) +
+                         self.params['bvis'].eval())
+
+#        rnds = np.random.randn(mean_v.shape[0], mean_v.shape[1]).astype(h.dtype)
+#        return np.clip(mean_v + rnds * self.sigma, 0, 1)
+        mvvm = mean_v * (1 - mean_v)
+        var_v = np.fmin(mvvm, self.sigma**2)
+        operand = (mvvm + 1.5 * eps) / (var_v + eps) - 1
+        alpha = mean_v * operand
+        beta = (1 - mean_v) * operand + eps
+
+        return np.random.beta(alpha, beta).astype(h.dtype)
 
 
 class ERBM(RBM):
