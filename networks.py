@@ -182,9 +182,10 @@ class Coder(object):
         if kind == 'hidden':
             method = lambda x: \
                          self.get_hidden_values(x, reduced=True, store=False)
-        elif kind == 'recode':
-            method = lambda x: self.recode(x)
-        else: raise ValueError('Do not understand kind option: ' + kind)
+        else:
+            method = getattr(self, kind, None)
+            if method is None:
+                raise ValueError('Do not understand kind option: ' + kind)
                 
         for i in range(0, len(data) - batch_size + 1, batch_size):
             values = method(data[i:i+batch_size]).eval()
@@ -325,6 +326,7 @@ class Denoising(Auto):
         """
 
         Auto.__init__(self, **kwargs)
+
         self.corruption = corruption
 
         # Train args has an additional element:
@@ -448,7 +450,7 @@ class Conv(Coder):
 
     def set_batch_size(self, batch_size):
         self.batch_size = batch_size
-
+        
 
     def get_hidden_values(self, inputs, **kwargs):
 
@@ -457,11 +459,12 @@ class Conv(Coder):
         return self.coding(h_conv + self.params['bhid'])
 
 
-    def get_reconstructed_input(self, hidden, **kwargs):
+    def get_reconstructed_input(self, hidden, scale=None, **kwargs):
         
         shape = [self.batch_size] + self.shapes[0]
         outputs = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
                                          self.strides, padding=self.padding)
+        if scale: outputs *= scale
         
         return self.decoding(outputs + self.params['bvis'])
 
@@ -509,7 +512,8 @@ class ConvMaxSquare(Conv):
         self.batch_size = batch_size
         self.shapes[2][0] = batch_size
         self.zeros = tf.zeros(self.shapes[2], dtype=self.dtype)
-                
+        self.state = {}
+        
 
     def output_shape(self, reduced=True):
         if reduced: return self.shapes[2][:3] + [self.n_hidden]
@@ -789,7 +793,7 @@ class RRBM(RBM):
 
     attr_names = RBM.attr_names + ['sigma']
 
-    def __init__(self, sigma=0.26, **kwargs):
+    def __init__(self, sigma=0.125, **kwargs):
         """
         CDk:
         Number of Gibbs sampling steps to use for contrastive divergence
@@ -800,7 +804,8 @@ class RRBM(RBM):
         """
         
         RBM.__init__(self, **kwargs)
-        if sigma is not None: self.sigma = sigma
+        if not kwargs.get('fromfile'):
+            self.sigma = sigma
         if self.sigma is None: raise AssertionError('Need to supply sigma param.')
 
 
@@ -814,15 +819,15 @@ class RRBM(RBM):
         mean_v = sigmoid(np.dot(h, self.params['W'].eval().T) +
                          self.params['bvis'].eval())
 
-#        rnds = np.random.randn(mean_v.shape[0], mean_v.shape[1]).astype(h.dtype)
-#        return np.clip(mean_v + rnds * self.sigma, 0, 1)
-        mvvm = mean_v * (1 - mean_v)
-        var_v = np.fmin(mvvm, self.sigma**2)
-        operand = (mvvm + 1.5 * eps) / (var_v + eps) - 1
-        alpha = mean_v * operand
-        beta = (1 - mean_v) * operand + eps
-
-        return np.random.beta(alpha, beta).astype(h.dtype)
+        rnds = np.random.randn(mean_v.shape[0], mean_v.shape[1]).astype(h.dtype)
+        return np.clip(mean_v + rnds * self.sigma, 0, 1)
+#        mvvm = mean_v * (1 - mean_v)
+#        var_v = np.fmin(mvvm, self.sigma**2)
+#        operand = (mvvm + 1.5 * eps) / (var_v + eps) - 1
+#        alpha = mean_v * operand
+#        beta = (1 - mean_v) * operand + eps
+#
+#        return np.random.beta(alpha, beta).astype(h.dtype)
 
 
 class ERBM(RBM):
