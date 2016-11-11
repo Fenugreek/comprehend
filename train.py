@@ -47,6 +47,7 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
         rms_loss += coder.rms_loss(batch).eval()
         if costing != tf.squared_difference:
             cost += coder.cost(*coder.cost_args(batch), function=costing).eval()
+
     if costing == tf.squared_difference: cost = rms_loss
     
     return (cost / n_batches, rms_loss / n_batches)
@@ -95,7 +96,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
                      .minimize(coder.cost(*coder.train_args, function=costing))
     sess.run(tf.initialize_all_variables())
 
-    if verbose: print('Initial cost %5.1f r.m.s. loss %.3f' %
+    if verbose: print('Initial cost %5.2f r.m.s. loss %.4f' %
                       get_costs(coder, validation_set, batch_size, costing))
     
     n_train_batches = dataset.shape[0] // batch_size
@@ -106,7 +107,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             train_step.run(feed_dict=coder.train_feed(batch))
 
         if verbose:
-            print('Training epoch %d cost %5.2f r.m.s. loss %.3f ' %
+            print('Training epoch %d cost %5.2f r.m.s. loss %.4f ' %
                   ((epoch,) + get_costs(coder, validation_set, batch_size, costing)))
 
 
