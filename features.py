@@ -47,8 +47,8 @@ def corrsort(features, use_tsp=False):
     return results
 
 
-def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
-         corr=False, use_tsp=False, spacing_value=0):
+def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=False,
+         sort=False, use_tsp=False, spacing_value=0):
     """
     Transform an array with one flattened image per row, into an array in
     which images are reshaped and layed out like tiles on a floor.
@@ -63,7 +63,7 @@ def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
     a 2-D/3-D array in which every row is a flattened or unflattened image.
 
     shape: tuple; (height, width)
-    The original shape of each image; defaults to be most square.
+    The original shape of each image, if X is 2-D; defaults to be most square.
 
     tile: tuple; (rows, cols)
     The number of images to tile (rows, cols); defaults to be most square.
@@ -74,7 +74,7 @@ def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
     scale:
     If True, scale values to [0,1].
 
-    corr:
+    sort:
     If True, tile features such that correlated features appear together
     (ordered columnwise, then rowwise).
 
@@ -87,12 +87,13 @@ def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=True,
         else: shape = integers.squarest_factors(X.shape[-1])
     else: assert len(shape) == 2
 
-    if tile is None: tile = integers.squarest_factors(X.shape[0])
+    if tile is None:
+        tile = integers.squarest_factors(X.shape[0], shape)
     else: assert len(tile) == 2
     
     assert len(spacing) == 2
 
-    if corr is True:
+    if sort is True:
         if X.ndim == 2: X = X[corrsort(X, use_tsp=use_tsp)]
         else: X = X[corrsort(X.reshape((len(X), -1)), use_tsp=use_tsp)]
         
