@@ -17,6 +17,7 @@ import cPickle
 from collections import OrderedDict
 
 from tamarind.functions import sigmoid, unit_scale, logit
+from tamarind import arrays
 import functions, train
 
 float_dt = tf.float32
@@ -571,6 +572,132 @@ class ConvMaxSquare(Conv):
                                                                self.state['overlay']))
         
         
+class ConvMax1D(ConvMaxSquare):
+    """
+    Convolutional Auto-Encoder with max pooling, using a kernel shape
+    that covers height of input completely.
+    
+    So results of convolution is 1D, and max pooling is done on this 1D.
+    """
+    attr_names = Conv.attr_names + ['pool_width']
+
+    def __init__(self, input_shape=[28, 28, 1],
+                 kernel_width=5, pool_width=2, **kwargs):
+        """
+        input_shape, axis:
+        (rows, columns) of input data and axis along which convolution kernel
+        slides.
+
+        kernel_width, pool_width:
+        The 1D size of the kernel along the dimension to slide, and
+        the 1D size of the max pooling window.
+        """
+
+        Conv.__init__(self, input_shape=input_shape,
+                      kernel_shape=[kernel_width] + input_shape[1:], **kwargs)
+
+        if not kwargs.get('fromfile'):
+            self.pool_width = pool_width
+            self.shapes.append([])
+            
+        # Pool shape
+        input_size = self.shapes[0][0] if self.padding == 'SAME' else \
+                     self.shapes[0][0] - self.shapes[1][0] + 1
+        self.shapes[2] = [self.batch_size,
+                          input_size / self.strides[1] / self.pool_width,
+                          self.pool_width, 1, self.n_hidden]
+        self.zeros = tf.zeros(self.shapes[2], dtype=tf.float32)
+        self.state = {}
+
+
+    def output_shape(self, reduced=True):
+        if reduced: return self.shapes[2][:2] + [1, self.n_hidden]
+        else:       return Conv.output_shape(self)
+
+
+    def get_hidden_values(self, inputs, reduced=False, store=False):
+
+        hidden = Conv.get_hidden_values(self, inputs)
+
+        pool = tf.reshape(hidden, self.shapes[2])
+        if reduced and not store: return tf.reduce_max(pool, 2)
+
+        # Replace all non-max values with 0.0.
+        overlay = tf.one_hot(tf.argmax(pool, 2), self.pool_width,
+                             axis=2, on_value=True, off_value=False)
+        if store: self.state['overlay'] = overlay
+
+        return tf.reduce_max(pool, 2) if reduced else \
+               self._pool_overlay(pool, overlay)
+
+
+    def _pool_overlay(self, pool, overlay):
+
+        pool = tf.select(overlay, pool, self.zeros)
+        pool_shape = self.shapes[2]
+        return tf.reshape(pool, [self.batch_size, pool_shape[1] * pool_shape[2],
+                                 1, self.n_hidden])
+
+
+    def _make_overlay(self, location):
+        if np.isscalar(location): location = [location]
+        overlay = np.zeros(self.shapes[2], np.bool)
+        for loc in location:
+            overlay[:, :, loc, ...] = True
+        return overlay
+
+
+    def _random_overlay(self, static_hidden=False):
+        """Construct random max pool locations."""
+
+        s = self.shapes[2]
+
+        if static_hidden:
+            args = np.random.randint(s[2], size=np.prod(s) / s[2] / s[4])
+            overlay = np.zeros(np.prod(s) / s[4], np.bool)
+            overlay[args + np.arange(len(args)) * s[2]] = True
+            overlay = overlay.reshape([s[0], s[1], s[3], s[2]])
+            overlay = np.rollaxis(overlay, -1, 2)
+            return tamarind.arrays.extend(overlay, s[4])
+        else:
+            args = np.random.randint(s[2], size=np.prod(s) / s[2])
+            overlay = np.zeros(np.prod(s), np.bool)
+            overlay[args + np.arange(len(args)) * s[2]] = True
+            overlay = overlay.reshape([s[0], s[1], s[3], s[4], s[2]])
+            return np.rollaxis(overlay, -1, 2)            
+        
+    
+    def get_reconstructed_input(self, hidden, reduced=False,
+                                overlay=None, static_hidden=False, scale=True):
+        """
+        overlay mask holds positions of max indices (when max pooling was done).
+        If None, use previous state where possible.
+        If None, and no previous state, assign random positions.
+        If scalar, set max indices to this.
+        If list, put in multiple positions.
+        Same random position is assigned to every hidden
+        """        
+
+        if not reduced:
+            return Conv.get_reconstructed_input(self, hidden)
+
+        hidden = tf.tile(tf.expand_dims(hidden, 3),
+                         [1, 1, self.pool_width, 1, 1])
+
+        if overlay is None:
+            overlay = self.state.get('overlay')
+            if overlay is None:
+                overlay = self._random_overlay(static_hidden=static_hidden)
+        elif np.isscalar(overlay) or type(overlay) == list:
+            if scale and type(overlay) == list and len(overlay) > 1:
+                scale = 1. / len(overlay)
+            else: scale = None
+            overlay = self._make_overlay(overlay)
+            
+        return Conv.get_reconstructed_input(self,
+                                  self._pool_overlay(hidden, overlay), scale=scale)
+
+
 class RBM(Auto):
     """Restricted Boltzmann Machine. Adapted from deeplearning.net."""
 
