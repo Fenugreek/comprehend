@@ -127,11 +127,11 @@ class Layers(networks.Conv):
         if layer < 0: layer += len(self.coders)
         coders = self.coders[:layer+1]
 
-        values = coders[-1].get_reconstructed_input(hidden, reduced=True)
+        values = coders[-1].get_reconstructed_input(hidden, reduced=True, **kwargs)
         for i in range(2, len(coders) + 1):
             if coders[-i+1].input_shape() != coders[-i].output_shape():
                 values = tf.reshape(values, coders[-i].output_shape())
-            values = coders[-i].get_reconstructed_input(values, reduced=True)
+            values = coders[-i].get_reconstructed_input(values, reduced=True, **kwargs)
 
         return values
 
