@@ -16,6 +16,8 @@ from numpy.random import randint
 import tensorflow as tf
 import functions
 
+float_dt = tf.float32
+
 def corrupt(dataset, corruption):
     """
     Return a corrupted copy of the input dataset.
@@ -55,7 +57,7 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
 
 def get_label_costs(coder, dataset, labels, batch_size=100):
     """
-    Return average cost function value and class error rate
+    Return average cross entropy loss and class error rate on
     dataset by coder object with its current weights.
     """
     
@@ -75,6 +77,23 @@ def get_label_costs(coder, dataset, labels, batch_size=100):
         error += tf.reduce_mean(tf.cast(bad_prediction, tf.float32)).eval()
     
     return (cost / n_batches, error / n_batches)
+
+
+def get_target_costs(coder, dataset, targets, batch_size=100):
+    """
+    Return average r.m.s. error between target and hidden values on 
+    dataset by coder object with its current weights.
+    """
+    
+    n_batches = dataset.shape[0] // batch_size
+    cost = 0.
+    for index in range(n_batches):
+        batch = dataset[index * batch_size : (index+1) * batch_size]
+        targets_batch = targets[index * batch_size : (index+1) * batch_size]
+        predicted = coder.get_hidden_values(batch)
+        cost += tf.reduce_mean(tf.squared_difference(targets_batch, predicted)).eval()
+    
+    return (cost / n_batches)**.5
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
@@ -119,7 +138,7 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
 
     sess: TensorFlow session.
 
-    coder: networks object that supports cost() and rms_loss() methods.
+    coder: networks object that supports label_cost() method.
 
     dataset, labels: dataset for training, with associated labels.
 
@@ -149,3 +168,44 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
             print('Training epoch %d cost %5.2f error rate %.3f ' %
                   ((epoch,) + get_label_costs(coder, valid_set, valid_labels,
                                               batch_size)))
+
+
+def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
+                 verbose=False, training_epochs=10, learning_rate=0.001,
+                 batch_size=100):
+    """
+    Train a networks object on given data for matching hidden values with targets.
+
+    sess: TensorFlow session.
+
+    coder: networks object that supports get_hidden_values() method.
+
+    dataset, targets: dataset for training, with associated targets.
+
+    valid_set, valid_targets: dataset for monitoring, with associated targets.
+    """
+
+    train_args = coder.train_args + [tf.placeholder(float_dt, shape=[None,
+                                                                     coder.n_hidden])]
+    train_step = tf.train.AdamOptimizer(learning_rate)\
+                     .minimize(coder.target_cost(*train_args))
+    sess.run(tf.initialize_all_variables())
+
+    if verbose:
+        print('Initial cost/r.m.s error %5.3f' %
+              get_target_costs(coder, valid_set, valid_targets, batch_size))
+
+    n_train_batches = dataset.shape[0] // batch_size
+    for epoch in range(training_epochs):
+
+        for index in range(n_train_batches):
+            train_feed = coder.train_feed(dataset[index * batch_size :
+                                                  (index+1) * batch_size])
+            train_feed[train_args[-1]] = targets[index * batch_size :
+                                                (index+1) * batch_size]
+            train_step.run(feed_dict=train_feed)
+
+        if verbose:
+            print('Training epoch %d cost/r.m.s. error %5.3f' %
+                  (epoch, get_target_costs(coder, valid_set, valid_targets,
+                                            batch_size)))
