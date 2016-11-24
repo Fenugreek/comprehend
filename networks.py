@@ -15,6 +15,7 @@ import numpy as np
 from numpy.random import randint, random_sample, randn
 import cPickle
 from collections import OrderedDict
+from scipy.stats import multivariate_normal
 
 from tamarind.functions import sigmoid, unit_scale, logit
 from tamarind import arrays
@@ -155,8 +156,9 @@ class Coder(object):
             
         return batch_size
 
+
     def dump_output(self, data, filename, kind='hidden',
-                    batch_size=None, dtype=None):
+                    batch_size=None, dtype=None, **kwargs):
         """
         Compute hidden/recode values for given input data, according to current
         weights of the network, and then write to disk.
@@ -177,19 +179,16 @@ class Coder(object):
         If <self> has <batch_size> as an attribute, that is used by default.
         """
         
+        if kind == 'hidden': kind = 'get_hidden_values'
+        method = getattr(self, kind, None)
+        if method is None:
+            raise ValueError('Do not understand kind option: ' + kind)
+
         save_file = open(filename, 'wb')
         batch_size = self._get_set_batch_size(batch_size) or len(data)
-
-        if kind == 'hidden':
-            method = lambda x: \
-                         self.get_hidden_values(x, reduced=True, store=False)
-        else:
-            method = getattr(self, kind, None)
-            if method is None:
-                raise ValueError('Do not understand kind option: ' + kind)
                 
         for i in range(0, len(data) - batch_size + 1, batch_size):
-            values = method(data[i:i+batch_size]).eval()
+            values = method(data[i:i+batch_size], **kwargs).eval()
             if dtype is not None: values = values.astype(dtype, copy=False)
             cPickle.dump(values, save_file, -1)
                        
@@ -219,18 +218,18 @@ class Coder(object):
         return None #implement in subclass
 
 
-    def recode(self, inputs):
+    def recode(self, inputs, **kwargs):
         """Encode and then decode input, using current params."""
-        y = self.get_hidden_values(inputs)
-        return self.get_reconstructed_input(y)
+        y = self.get_hidden_values(inputs, **kwargs)
+        return self.get_reconstructed_input(y, **kwargs)
 
 
-    def cost(self, inputs, function=functions.cross_entropy):
+    def cost(self, inputs, function=functions.cross_entropy, **kwargs):
         """
         Cost for given input batch of samples, under current params.
         Mean cross entropy between input and encode-decoded input.
         """
-        loss = function(inputs, self.recode(inputs))
+        loss = function(inputs, self.recode(inputs, **kwargs))
         return tf.reduce_mean(
                         tf.reduce_sum(loss,
                                       reduction_indices=range(1, self.input_dims)))
@@ -246,11 +245,19 @@ class Coder(object):
         return tf.reduce_mean(loss)
 
 
-    def rms_loss(self, inputs):
+    def target_cost(self, inputs, targets, function=tf.squared_difference):
+        """
+        For mapping problems, r.m.s. difference between hidden values and targets.
+        i.e. Cost for given input batch of samples, under current params.
+        """
+        return tf.reduce_mean(function(self.get_hidden_values(inputs), targets))
+
+
+    def rms_loss(self, inputs, **kwargs):
         """
         Root-mean-squared difference between <inputs> and encoded-decoded output.
         """
-        loss = tf.squared_difference(inputs, self.recode(inputs))
+        loss = tf.squared_difference(inputs, self.recode(inputs, **kwargs))
         return tf.reduce_mean(
                         tf.reduce_mean(loss,
                                        reduction_indices=range(1, self.input_dims)) ** .5)
@@ -336,13 +343,13 @@ class Denoising(Auto):
                                               shape=[None, self.n_visible]))
         
 
-    def cost(self, inputs, corrupts):
+    def cost(self, inputs, corrupts, **kwargs):
         """
         Cost for given input batch of samples, under current params.
         Mean cross entropy between input and encode-decoded corrupted
         version of the input.
         """
-        loss = functions.cross_entropy(inputs, self.recode(corrupts))
+        loss = functions.cross_entropy(inputs, self.recode(corrupts, **kwargs))
         return tf.reduce_mean(
                         tf.reduce_sum(loss,
                                       reduction_indices=range(1, self.input_dims)))
@@ -561,7 +568,7 @@ class ConvMaxSquare(Conv):
                                  self.pool_side)
 
 
-    def get_reconstructed_input(self, hidden, reduced=False):
+    def get_reconstructed_input(self, hidden, reduced=False, **kwargs):
 
         if not reduced: return Conv.get_reconstructed_input(self, hidden)
 
@@ -615,7 +622,7 @@ class ConvMax1D(ConvMaxSquare):
         else:       return Conv.output_shape(self)
 
 
-    def get_hidden_values(self, inputs, reduced=False, store=False):
+    def get_hidden_values(self, inputs, reduced=False, store=False, **kwargs):
 
         hidden = Conv.get_hidden_values(self, inputs)
 
@@ -703,19 +710,19 @@ class RBM(Auto):
 
     attr_names = Auto.attr_names + ['CDk', 'persistent']
 
-    def __init__(self, CDk=1, persistent=False, **kwargs):
+    def __init__(self, CDk=2, persistent=False, **kwargs):
         """
         CDk:
         Number of Gibbs sampling steps to use for contrastive divergence
         when computing cost.
 
         persistent:
-        Set to True to use persistend CD.
+        Set to True to use persistent CD.
         """
-        
+
         Auto.__init__(self, **kwargs)
         if not kwargs.get('fromfile'):
-            self.CDk = CDk
+            self.CDk = CDk 
             self.persistent = persistent
 
         # Store end of the Gibbs chain here.
@@ -916,29 +923,29 @@ class RBM(Auto):
 
 
 class RRBM(RBM):
-    """Real valued Rstricted Boltzmann Machine."""
+    """Real valued Restricted Boltzmann Machine."""
 
-    attr_names = RBM.attr_names + ['sigma']
+    attr_names = RBM.attr_names + ['sigma', 'beta_sampling']
 
-    def __init__(self, sigma=0.125, **kwargs):
+    def __init__(self, sigma=0.1, beta_sampling=True, **kwargs):
         """
-        CDk:
-        Number of Gibbs sampling steps to use for contrastive divergence
-        when computing cost.
+        sigma:
+        Standard deviation of input data, for use in sampling.
 
-        persistent:
-        Set to True to use persistend CD.
+        beta_sampling:
+        Use beta distribution for sampling, instead of Gaussian.
         """
         
         RBM.__init__(self, **kwargs)
         if not kwargs.get('fromfile'):
             self.sigma = sigma
+            self.beta_sampling = beta_sampling
         if self.sigma is None: raise AssertionError('Need to supply sigma param.')
 
 
     def free_energy(self, v):
         return RBM.free_energy(self, v) + \
-               .5 * tf.reduce_sum(v**2, reduction_indices=[1])
+               .5 * tf.reduce_sum((v - .5)**2, reduction_indices=[1])
 
 
     def sample_v_given_h(self, h, eps=1e-5):
@@ -946,15 +953,40 @@ class RRBM(RBM):
         mean_v = sigmoid(np.dot(h, self.params['W'].eval().T) +
                          self.params['bvis'].eval())
 
-        rnds = np.random.randn(mean_v.shape[0], mean_v.shape[1]).astype(h.dtype)
-        return np.clip(mean_v + rnds * self.sigma, 0, 1)
-#        mvvm = mean_v * (1 - mean_v)
-#        var_v = np.fmin(mvvm, self.sigma**2)
-#        operand = (mvvm + 1.5 * eps) / (var_v + eps) - 1
-#        alpha = mean_v * operand
-#        beta = (1 - mean_v) * operand + eps
-#
-#        return np.random.beta(alpha, beta).astype(h.dtype)
+        if not self.beta_sampling:
+            rnds = np.random.randn(mean_v.shape[0], mean_v.shape[1]).astype(h.dtype)
+            return np.clip(mean_v + rnds * self.sigma, 0, 1)
+        
+        mvvm = mean_v * (1 - mean_v)
+        var_v = np.fmin(mvvm, self.sigma**2)
+        operand = (mvvm + 1.5 * eps) / (var_v + eps) - 1
+        alpha = mean_v * operand
+        beta = (1 - mean_v) * operand + eps
+
+        return np.random.beta(alpha, beta).astype(h.dtype)
+
+
+class R3BM(RRBM):
+    """
+    Real-valued RBM with real-valued hidden units too.
+    """
+    
+    def sample_h_given_v(self, v, eps=1e-5):
+        
+        mean_h = sigmoid(np.dot(v, self.params['W'].eval()) +
+                         self.params['bhid'].eval())
+
+        if not self.beta_sampling:
+            rnds = np.random.randn(mean_h.shape[0], mean_h.shape[1]).astype(v.dtype)
+            return np.clip(mean_h + rnds * self.sigma, 0, 1)
+        
+        mhhm = mean_h * (1 - mean_h)
+        var_h = np.fmin(mhhm, self.sigma**2)
+        operand = (mhhm + 1.5 * eps) / (var_h + eps) - 1
+        alpha = mean_h * operand
+        beta = (1 - mean_h) * operand + eps
+
+        return np.random.beta(alpha, beta).astype(v.dtype)
 
 
 class ERBM(RBM):
@@ -1111,7 +1143,7 @@ class RNN(Coder):
         return outputs, states
 
 
-    def recode(self, inputs):
+    def recode(self, inputs, **kwargs):
         """
         Wrapper around get_outputs() to fit recode() signature of parent class.
         """
@@ -1246,4 +1278,123 @@ class RNNtie(RNN):
     """Recurrent neural network with tied weights."""
     param_names = ['Wxh', 'Whh', 'bhid', 'bvis']
 
+
+
+class VAE(Coder):
+    """Variational Autoencoder."""
+    
+    param_names = ['Wxh', 'Mhz', 'Shz', 'Wzh', 'Mhx', 'Shx',
+                   'bWxh', 'bMhz', 'bShz', 'bWzh', 'bMhx', 'bShx']
+    attr_names = Coder.attr_names + ['n_z']
+
+    def __init__(self, n_z=20, **kwargs):
+        """
+        n_z:
+        Dimension of latent variables.
+        """
+        
+        self.n_z = n_z
+        Coder.__init__(self, **kwargs)
+
+        # Train args has an additional element: sampling from latent space
+        self.train_args.append(tf.placeholder(float_dt,
+                                              shape=[None, self.n_z]))
+
+
+    def init_params(self, constant=1, trainable=True, **kwargs):
+
+        self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden,
+                                         'Wxh', constant, trainable=trainable)
+        self.params['Mhz'] = xavier_init(self.n_hidden, self.n_z,
+                                         'Mhz', constant, trainable=trainable)
+        self.params['Shz'] = xavier_init(self.n_hidden, self.n_z,
+                                         'Shz', constant, trainable=trainable)
+
+        self.params['Wzh'] = xavier_init(self.n_z, self.n_hidden,
+                                         'Wzh', constant, trainable=trainable)
+        self.params['Mhx'] = xavier_init(self.n_hidden, self.n_visible,
+                                         'Mhx', constant, trainable=trainable)
+        self.params['Shx'] = xavier_init(self.n_hidden, self.n_visible,
+                                         'Shx', constant, trainable=trainable)
+
+        self.params['bWxh'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bWxh', trainable=trainable)
+        self.params['bMhz'] = tf.Variable(tf.zeros([self.n_z], dtype=float_dt), name='bMhz', trainable=trainable)
+        self.params['bShz'] = tf.Variable(tf.zeros([self.n_z], dtype=float_dt), name='bShz', trainable=trainable)
+
+        self.params['bWzh'] = tf.Variable(tf.zeros([self.n_hidden], dtype=float_dt), name='bWxh', trainable=trainable)
+        self.params['bMhx'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt), name='bMhx', trainable=trainable)
+        self.params['bShx'] = tf.Variable(tf.zeros([self.n_visible], dtype=float_dt), name='bMhx', trainable=trainable)
+
+
+    def get_h_inputs(self, inputs):
+        """Computes the values of the hidden layer, given inputs."""
+        return self.coding(tf.matmul(inputs, self.params['Wxh']) +
+                           self.params['bWxh'])
+    
+
+    def get_hidden_values(self, inputs, **kwargs):
+        """Computes the values of the latent z variables."""
+        h = self.get_h_inputs(inputs)
+        return tf.matmul(h, self.params['Mhz']) + self.params['bMhz']
+
+
+    def get_h_latents(self, latents):
+        """Computes the values of the hidden layer, generative network."""
+        return self.coding(tf.matmul(latents, self.params['Wzh']) +
+                          self.params['bWzh'])
+
+
+    def get_reconstructed_input(self, latents, **kwargs):
+        """
+        Computes the reconstructed input given the values of the
+        latent z variables.
+        """
+        h = self.get_h_latents(latents)
+        return self.decoding(tf.matmul(h, self.params['Mhx']) +
+                             self.params['bMhx'])
+
+
+    def cost(self, inputs, variation, eps=1e-5, **kwargs):
+        """
+        Cost for given input batch of samples, under current params.
+        """
+        h = self.get_h_inputs(inputs)
+        z_mu = tf.matmul(h, self.params['Mhz']) + self.params['bMhz']
+        z_sig = tf.matmul(h, self.params['Shz']) + self.params['bShz']
+
+        # KL divergence between latent space induced by encoder and ...
+        lat_loss = -tf.reduce_sum(1 + z_sig - z_mu**2 - tf.exp(z_sig), 1)
+
+        z = z_mu + tf.sqrt(tf.exp(z_sig)) * variation
+        h = self.get_h_latents(z)
+        x_mu = self.decoding(tf.matmul(h, self.params['Mhx']) + self.params['bMhx'])
+        x_sig = self.decoding(tf.matmul(h, self.params['Shx']) + self.params['bShx'])
+#        x_sig = tf.clip_by_value(x_mu * (1 - x_mu), .05, 1)
+
+        # decoding likelihood term
+        like_loss = tf.reduce_sum(tf.log(x_sig + eps) +
+                                  (inputs - x_mu)**2 / x_sig, 1)
+
+#        # Mean cross entropy between input and encode-decoded input.
+#        like_loss = 2 * tf.reduce_sum(functions.cross_entropy(inputs, x_mu), 1)
+        
+        return .5 * tf.reduce_mean(like_loss + lat_loss)
+
+
+    def train_feed(self, data):
+        """Return feed_dict based on data to be used for training."""
+
+        return {self.train_args[0]: data,
+                self.train_args[1]: randn(data.shape[0], self.n_z)}
+
+
+    def cost_args(self, data):
+        """Return args to self.cost() for given dataset."""
+
+        return [data, randn(data.shape[0], self.n_z)]
+
+
+    def features(self, *args):
+        """Return weights in suitable manner for plotting."""
+        return self.params['Wxh'].eval().T
 
