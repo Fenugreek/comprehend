@@ -101,23 +101,23 @@ class Layers(networks.Conv):
         return values
 
     
-    def recode(self, inputs, layer=-1):
+    def recode(self, inputs, layer=-1, **kwargs):
 
         if layer < 0: layer += len(self.coders)
         coders = self.coders[:layer+1]
 
-        values = coders[0].get_hidden_values(inputs, store=True, reduced=True)
+        values = coders[0].get_hidden_values(inputs, store=True, reduced=True, **kwargs)
         for i in range(1, len(coders)):
             if coders[i-1].output_shape() != coders[i].input_shape():
                 values = tf.reshape(values, coders[i].input_shape())
             if i != len(coders) - 1:
-                values = coders[i].get_hidden_values(values, store=True, reduced=True)
+                values = coders[i].get_hidden_values(values, store=True, reduced=True, **kwargs)
 
-        values = coders[-1].recode(values)
+        values = coders[-1].recode(values, **kwargs)
         for i in range(2, len(coders) + 1):
             if coders[-i+1].input_shape() != coders[-i].output_shape():
                 values = tf.reshape(values, coders[-i].output_shape())
-            values = coders[-i].get_reconstructed_input(values, reduced=True)
+            values = coders[-i].get_reconstructed_input(values, reduced=True, **kwargs)
 
         return values
 
@@ -226,3 +226,46 @@ def add_class_layer(coder, n_classes, coding=tf.nn.elu):
     return add_layer(coder, networks.Auto(n_visible=np.prod(coder.output_shape()[1:]),
                                           n_hidden=n_classes, verbose=coder.verbose,
                                           coding=coding, dtype=coder.dtype))
+
+
+class DRBM(Layers, networks.RBM):
+    """
+    Deep RBM -- multiple layers. Not stacked RBMs, but a deep RBM.
+    """
+    
+    def __init__(self, **kwargs):
+
+        Layers.__init__(self, **kwargs)
+        self.CDk = self.coders[0].CDk
+        self.persistent = self.coders[0].persistent
+        self.chain_end = None
+        
+
+    def free_energy(self, v):
+
+        f = tf.squeeze(tf.matmul(v, tf.expand_dims(self.coders[0].params['bvis'], 1)))
+        for i in range(len(self.coders)):
+            coder = self.coders[i]
+            if i:
+                v = self.coders[i-1].get_hidden_values(v)
+                f += tf.squeeze(tf.matmul(v, tf.expand_dims(coder.params['bvis'], 1)))
+                
+            Wx_b = tf.matmul(v, coder.params['W']) + coder.params['bhid']
+            f += tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)), reduction_indices=[1])
+
+        return -f
+
+
+    def sample_h_given_v(self, v):
+
+        for coder in self.coders:
+            v = coder.sample_h_given_v(v)
+        return v
+
+
+    def sample_v_given_h(self, h):
+
+        for coder in self.coders[::-1]:
+            h = coder.sample_v_given_h(h)
+        return h
+
