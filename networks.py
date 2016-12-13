@@ -316,6 +316,20 @@ class Auto(Coder):
         return self.params['W'].eval().T
 
 
+    def invert(self):
+        """Invert weights, biases so visible <=> hidden."""
+
+        self.params['W'] = tf.transpose(self.params['W'])
+        
+        bhid = self.params['bhid']
+        self.params['bhid'] = self.params['bvis']
+        self.params['bvis'] = bhid
+        
+        n_hidden = self.n_hidden
+        self.n_hidden = self.n_visible
+        self.n_visible = n_hidden
+
+        
 class Denoising(Auto):
     """
     Denoising Auto-Encoder.
@@ -741,7 +755,8 @@ class RBM(Auto):
         """Approx free energy of system given visible unit values."""
 
         Wx_b = tf.matmul(v, self.params['W']) + self.params['bhid']
-        vbias_term = tf.squeeze(tf.matmul(v, tf.expand_dims(self.params['bvis'], 1)))
+        vbias_term = tf.squeeze(tf.matmul(v, tf.expand_dims(self.params['bvis'],
+                                                            1)))
         hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)),
                                     reduction_indices=[1])
 
