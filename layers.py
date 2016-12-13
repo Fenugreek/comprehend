@@ -243,17 +243,12 @@ class DRBM(Layers, networks.RBM):
 
     def free_energy(self, v):
 
-        f = tf.squeeze(tf.matmul(v, tf.expand_dims(self.coders[0].params['bvis'], 1)))
-        for i in range(len(self.coders)):
-            coder = self.coders[i]
-            if i:
-                v = self.coders[i-1].get_hidden_values(v)
-                f += tf.squeeze(tf.matmul(v, tf.expand_dims(coder.params['bvis'], 1)))
-                
-            Wx_b = tf.matmul(v, coder.params['W']) + coder.params['bhid']
-            f += tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)), reduction_indices=[1])
+        f = self.coders[0].free_energy(v)
+        for i in range(1, len(self.coders)):
+            v = self.coders[i - 1].get_hidden_values(v)
+            f += self.coders[i].free_energy(v)
 
-        return -f
+        return f
 
 
     def sample_h_given_v(self, v):
