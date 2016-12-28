@@ -79,21 +79,28 @@ def get_label_costs(coder, dataset, labels, batch_size=100):
     return (cost / n_batches, error / n_batches)
 
 
-def get_target_costs(coder, dataset, targets, batch_size=100):
+def get_target_costs(coder, dataset, targets, batch_size=100, costing=tf.squared_difference):
     """
     Return average r.m.s. error between target and hidden values on 
     dataset by coder object with its current weights.
     """
+
+    batch = tf.placeholder(coder.dtype, [batch_size] + list(dataset.shape[1:]))
+    targets_batch = tf.placeholder(coder.dtype, [batch_size] + list(targets.shape[1:]))
+
+    predicted = coder.get_hidden_values(batch)
+    cost = tf.reduce_mean(costing(targets_batch, predicted))
     
     n_batches = dataset.shape[0] // batch_size
-    cost = 0.
+    sum_cost = 0.
     for index in range(n_batches):
-        batch = dataset[index * batch_size : (index+1) * batch_size]
-        targets_batch = targets[index * batch_size : (index+1) * batch_size]
-        predicted = coder.get_hidden_values(batch)
-        cost += tf.reduce_mean(tf.squared_difference(targets_batch, predicted)).eval()
+        feed_dict = {batch: dataset[index * batch_size : (index+1) * batch_size],
+                     targets_batch: targets[index * batch_size : (index+1) * batch_size]}
+        sum_cost += cost.eval(feed_dict=feed_dict)
     
-    return (cost / n_batches)**.5
+    ave_cost = sum_cost / n_batches
+    if costing == tf.squared_difference: ave_cost **= .5
+    return ave_cost
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
@@ -113,7 +120,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
 
     train_step = tf.train.AdamOptimizer(learning_rate)\
                      .minimize(coder.cost(*coder.train_args, function=costing))
-    sess.run(tf.initialize_all_variables())
+    sess.run(tf.global_variables_initializer())    
 
     if verbose: print('Initial cost %5.2f r.m.s. loss %.4f' %
                       get_costs(coder, validation_set, batch_size, costing))
@@ -132,7 +139,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
 
 def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
                 verbose=False, training_epochs=10, learning_rate=0.001,
-                batch_size=100):
+                batch_size=100, costing='dummy'):
     """
     Train a networks object on given data for classification.
 
@@ -148,7 +155,7 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
     train_args = coder.train_args + [tf.placeholder(tf.int32, shape=[None])]
     train_step = tf.train.AdamOptimizer(learning_rate)\
                      .minimize(coder.label_cost(*train_args))
-    sess.run(tf.initialize_all_variables())
+    sess.run(tf.global_variables_initializer())    
 
     if verbose:
         print('Initial cost %5.2f error rate %.3f ' %
@@ -172,7 +179,7 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
 
 def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
                  verbose=False, training_epochs=10, learning_rate=0.001,
-                 batch_size=100):
+                 batch_size=100, costing=tf.squared_difference):
     """
     Train a networks object on given data for matching hidden values with targets.
 
@@ -188,12 +195,12 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
     train_args = coder.train_args + [tf.placeholder(float_dt, shape=[None,
                                                                      coder.n_hidden])]
     train_step = tf.train.AdamOptimizer(learning_rate)\
-                     .minimize(coder.target_cost(*train_args))
-    sess.run(tf.initialize_all_variables())
+                     .minimize(coder.target_cost(*train_args, function=costing))
+    sess.run(tf.global_variables_initializer())    
 
     if verbose:
         print('Initial cost/r.m.s error %5.3f' %
-              get_target_costs(coder, valid_set, valid_targets, batch_size))
+              get_target_costs(coder, valid_set, valid_targets, batch_size, costing))
 
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
@@ -208,4 +215,4 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
         if verbose:
             print('Training epoch %d cost/r.m.s. error %5.3f' %
                   (epoch, get_target_costs(coder, valid_set, valid_targets,
-                                            batch_size)))
+                                            batch_size, costing)))
