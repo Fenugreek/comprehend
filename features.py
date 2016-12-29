@@ -12,13 +12,13 @@ from __future__ import division
 import numpy as np
 from tsp_solver import greedy as tsp
 from tamarind.functions import unit_scale
-from tamarind import integers
+from tamarind import integers, arrays
 
 
 def corrsort(features, use_tsp=False):
     """
-    Given a 2D array, one row per feature, return row indices such that
-    adjacent indices correspond to features that are correlated.
+    Given a features array, one feature per axis=0 entry, return axis=0 indices
+    such that adjacent indices correspond to features that are correlated.
 
     cf. Traveling Salesman Problem. Not an optimal solution.
 
@@ -29,7 +29,7 @@ def corrsort(features, use_tsp=False):
     Without use_tsp, both computation and memory are O(N^2).
     """
 
-    correlations = np.ma.corrcoef(features)
+    correlations = np.ma.corrcoef(arrays.plane(features))
     if use_tsp: return tsp.solve_tsp(-correlations)
 
     size = features.shape[0]    
@@ -50,7 +50,7 @@ def corrsort(features, use_tsp=False):
 def tile(X, shape=None, tile=None, spacing=(1, 1), scale=False, bytes=False,
          sort=False, use_tsp=False, spacing_value=0):
     """
-    Transform an array with one flattened image per row, into an array in
+    Transform an array with one image per row, into an array in
     which images are reshaped and layed out like tiles on a floor.
 
     This function is useful for visualizing datasets whose rows are images,

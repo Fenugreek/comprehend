@@ -1306,7 +1306,7 @@ class RNN(Coder):
 
             
         results = np.concatenate((prefix, Wxh, Why.T, suffix))
-        return results.T, (2 * length + 2, row_len)
+        return results.T.reshape((self.n_hidden, 2 * length + 2, row_len))
 
 
 class RNNtie(RNN):
