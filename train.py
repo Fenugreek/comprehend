@@ -41,18 +41,22 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
     set by coder object with its current weights.
     """
     
+    batch = tf.placeholder(coder.dtype, [batch_size] + list(dataset.shape[1:]))
+    loss = coder.rms_loss(batch)
+    if costing != tf.squared_difference:
+        cost = coder.cost(*coder.cost_args(batch), function=costing)
+        
     n_batches = dataset.shape[0] // batch_size
-    rms_loss = 0
-    cost = 0
+    sum_loss = 0
+    sum_cost = 0
     for index in range(n_batches):
-        batch = dataset[index * batch_size : (index+1) * batch_size]
-        rms_loss += coder.rms_loss(batch).eval()
+        feed_dict = {batch: dataset[index * batch_size : (index+1) * batch_size]}
+        sum_loss += loss.eval(feed_dict=feed_dict)
         if costing != tf.squared_difference:
-            cost += coder.cost(*coder.cost_args(batch), function=costing).eval()
-
-    if costing == tf.squared_difference: cost = rms_loss
+            sum_cost += cost.eval(feed_dict=feed_dict)
+    if costing == tf.squared_difference: sum_cost = sum_loss
     
-    return (cost / n_batches, rms_loss / n_batches)
+    return (sum_cost / n_batches, sum_loss / n_batches)
 
 
 def get_label_costs(coder, dataset, labels, batch_size=100):
