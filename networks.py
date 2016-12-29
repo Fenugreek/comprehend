@@ -82,6 +82,7 @@ class Coder(object):
         self.decoding = coding if decoding is None else decoding
         self.verbose = verbose
         self.dtype = dtype
+        if 'batch_size' in kwargs: self.batch_size = kwargs['batch_size']
         
         if random_seed is not None: tf.set_random_seed(random_seed)
 
@@ -452,7 +453,7 @@ class Conv(Coder):
         self.input_dims = 4
 
 
-    def init_params(self, trainable=True):
+    def init_params(self, trainable=True, **kwargs):
 
         i_shape, k_shape = self.shapes
 
@@ -627,7 +628,7 @@ class ConvMax1D(ConvMaxSquare):
         self.shapes[2] = [self.batch_size,
                           input_size / self.strides[1] / self.pool_width,
                           self.pool_width, 1, self.n_hidden]
-        self.zeros = tf.zeros(self.shapes[2], dtype=tf.float32)
+        self.zeros = tf.zeros(self.shapes[2], dtype=self.dtype)
         self.state = {}
 
 
@@ -1096,7 +1097,8 @@ class RNN(Coder):
         self.seq_length = seq_length
         Coder.__init__(self, n_visible=n_visible, n_hidden=n_hidden, **kwargs)
 
-    def init_params(self, trainable=True):
+
+    def init_params(self, trainable=True, **kwargs):
 
         self.params['Wxh'] = xavier_init(self.n_visible, self.n_hidden,
                                          name='Wxh', trainable=trainable, dtype=self.dtype)
@@ -1120,7 +1122,18 @@ class RNN(Coder):
         self.input_dims = 2
 
 
-    def update(self, states, inputs):
+    def input_shape(self):
+        return [getattr(self, 'batch_size', -1)] + [self.n_visible, self.seq_length]
+
+
+    def get_predicted_values(self, state):
+        return self.coding(tf.matmul(state,
+                                     self.params.get('Why',
+                                                     tf.transpose(self.params['Wxh']))) +
+                           self.params['bvis'])
+
+        
+    def update(self, states, inputs, prediction=True):
         """
         Update states given old states and new inputs.
         Return new states and outputs corresponding to inputs.
@@ -1129,12 +1142,9 @@ class RNN(Coder):
         operand = tf.matmul(inputs, self.params['Wxh']) + self.params['bhid']
         if states is not None: operand += tf.matmul(states, self.params['Whh'])
         states = self.coding(operand)
-        outputs = self.coding(tf.matmul(states,
-                                        self.params.get('Why',
-                                             tf.transpose(self.params['Wxh']))) +
-                              self.params['bvis'])
 
-        return states, outputs
+        if not prediction: return states
+        return states, self.get_predicted_values(states)
         
 
     def get_outputs(self, inputs, state, outputs=[], states=[], as_list=False):
@@ -1187,18 +1197,23 @@ class RNN(Coder):
         return tf.transpose(tf.pack(hidden), perm=[1, 2, 0])
 
 
-    def extend(self, inputs, length, as_list=False):
+    def predict_sequence(self, inputs, state, length, as_list=False):
         """
         Given initial sequence of inputs, extend by given length, feeding
         RNN outputs back to itself.
 
         Return full output and ending state.
+        Specify initial state via <state>. Can be None.
         """
 
-        outputs, states = \
-           self.get_outputs(inputs, None, [inputs[:, :, 0]], as_list=True)
-
-        state = states[-1]
+        if inputs is None:
+            states = [state]
+            outputs = [self.get_predicted_values(state)]
+        else:
+            outputs, states = \
+               self.get_outputs(inputs, state, [inputs[:, :, 0]], as_list=True)
+            state = states[-1]
+            
         for index in range(1, length):
             state, output = self.update(state, outputs[-1])
             outputs.append(output)
@@ -1210,7 +1225,7 @@ class RNN(Coder):
         return outputs, states
 
 
-    def features(self, sample, length=None, scale=True):
+    def features(self, sample, length=None, batch_size=None, scale=True):
         """
         Returns a rasterized 2D image for each hidden unit, along with
         the shape of each (unrasterized) such image.
@@ -1237,6 +1252,7 @@ class RNN(Coder):
 
         row_len = self.n_visible
         if length is None: length = row_len / 2
+        if not batch_size: batch_size = self.batch_size  
 
         #### sample sequential rows from <sample> ####
         times = row_len // length
@@ -1246,46 +1262,50 @@ class RNN(Coder):
             ends = randint(length, row_len, times)
             for e in ends: inputs.append(s.T[:e])
 
-        # We switch to numpy for processing, as it is much faster when
-        # we run the RNN one row at a time one sample at a time.
-        Wxh = self.params['Wxh'].eval()
-        Whh = self.params['Whh'].eval()
-        Why = self.params['Why'].eval() if 'Why' in self.params else Wxh.T
-        bhid = self.params['bhid'].eval()
-        bvis = self.params['bvis'].eval()
         
-        states, outputs = [], []
+        # For top half of feature image.
+        state = tf.placeholder(self.dtype, [1, self.n_hidden])
+        visible = tf.placeholder(self.dtype, [1, self.n_visible])
+        hidden = self.update(state, visible, prediction=False)
+        zero_state = np.zeros([1, self.n_hidden], dtype=self.dtype.as_numpy_dtype)
+        states = []
         for sample in inputs:
-            # For top half of feature image.
-            s = np.zeros((1, self.n_hidden), dtype=np.float32)
-            for row in sample:
-                s = sigmoid(np.dot(row, Wxh) + np.dot(s, Whh) + bhid)
-            states.append(np.fmax(logit(s), 0))
-            
-            # For bottom half of feature image.
-            o = [sigmoid(np.dot(s, Why) + bvis)]
-            for i in range(length - 1):
-                s = sigmoid(np.dot(o[-1], Wxh) + np.dot(s, Whh) + bhid)
-                o.append(sigmoid(np.dot(s, Why) + bvis))
-            outputs.append(np.array(o).squeeze().flatten())
+            s = hidden.eval(feed_dict={state: zero_state,
+                                       visible: sample[0][np.newaxis, :]})
+            for row in sample[1:]:
+                s = hidden.eval(feed_dict={state: s,
+                                           visible: row[np.newaxis, :]})
+            states.append(s.squeeze())
 
-        weights = np.array(states).squeeze()
-
-        # top half
+        weights = np.fmax(logit(np.array(states)), 1e-10)
         rows = np.array([i[-length:].flatten() for i in inputs])
         prefix = np.dot(rows.T, weights) / np.sum(weights, axis=0)
-        # bottom half
-        suffix = np.dot(np.array(outputs).T, weights) / np.sum(weights, axis=0)
-        
-        if scale:
-            prefix = unit_scale(prefix, axis=0)
-            suffix = unit_scale(suffix, axis=0)
+        if scale: prefix = unit_scale(prefix, axis=0)
 
-        results = np.concatenate((prefix,
-#                                  np.zeros(Wxh.shape),
-                                  unit_scale(Wxh, axis=0),
-                                  unit_scale(Why.T, axis=0),
-                                  suffix))
+
+        # For bottom half of feature image.
+        batch = tf.placeholder(self.dtype, [batch_size, self.n_hidden])
+        predicted, _ = self.predict_sequence(None, batch, length)
+        outputs = []
+        for index in range(len(states) // batch_size):
+            o = predicted.eval(feed_dict={batch: states[index * batch_size :
+                                                        (index+1) * batch_size]})
+            outputs.append(arrays.plane(o.swapaxes(1, 2)))
+
+        suffix = np.dot(np.concatenate(outputs).T, weights) / \
+                 np.sum(weights, axis=0)
+        if scale: suffix = unit_scale(suffix, axis=0)
+
+
+        # Compute middle two rows of feature image.
+        Wxh = self.params['Wxh'].eval()
+        Why = self.params['Why'].eval() if 'Why' in self.params else Wxh.T
+        if scale:
+            Wxh = unit_scale(Wxh, axis=0)
+            Why = unit_scale(Why, axis=1)
+
+            
+        results = np.concatenate((prefix, Wxh, Why.T, suffix))
         return results.T, (2 * length + 2, row_len)
 
 
@@ -1294,6 +1314,60 @@ class RNNtie(RNN):
     param_names = ['Wxh', 'Whh', 'bhid', 'bvis']
 
 
+
+class GRU(RNN):
+    """Recurrent neural network with gradient recurrent units."""
+
+    param_names = ['Wxh', 'Whh', 'Why', 'bhid', 'bvis',
+                   'Rxh', 'Rhh', 'Uxh', 'Uhh']
+
+
+    def init_params(self, trainable=True, **kwargs):
+
+        RNN.init_params(self, trainable=trainable, **kwargs)
+        
+
+        self.params['Rxh'] = xavier_init(self.n_visible, self.n_hidden,
+                                         name='Rxh', trainable=trainable, dtype=self.dtype)
+        self.params['Rhh'] = xavier_init(self.n_hidden, self.n_hidden,
+                                         name='Rhh', trainable=trainable, dtype=self.dtype)
+
+        self.params['Uxh'] = xavier_init(self.n_visible, self.n_hidden,
+                                         name='Uxh', trainable=trainable, dtype=self.dtype)
+        self.params['Uhh'] = xavier_init(self.n_hidden, self.n_hidden,
+                                         name='Uhh', trainable=trainable, dtype=self.dtype)
+
+
+    def update(self, states, inputs, prediction=True):
+
+        u_gate = tf.matmul(inputs, self.params['Uxh'])
+        if states is not None:
+            u_gate += tf.matmul(states, self.params['Uhh'])
+            r_gate = tf.sigmoid(tf.matmul(inputs, self.params['Rxh']) + 
+                                tf.matmul(states, self.params['Rhh']))
+        u_gate = tf.sigmoid(u_gate)
+
+        operand = tf.matmul(inputs, self.params['Wxh']) + self.params['bhid']
+        if states is not None:
+            operand += tf.matmul(states * r_gate, self.params['Whh'])
+        new_states = self.coding(operand) * (1. - u_gate)
+        if states is not None:
+            new_states += states  * u_gate
+
+        if not prediction: return new_states
+        return new_states, self.get_predicted_values(new_states)
+        
+        
+    def get_hidden_values(self, visible, states=None, as_list=False, **kwargs):
+        """
+        Given visible unit values, return expected hidden unit values.
+        """
+
+        outputs, hidden = self.get_outputs(visible, states, as_list=as_list,
+                                           outputs=[], states=[])
+        return hidden
+
+        
 
 class VAE(Coder):
     """Variational Autoencoder."""
