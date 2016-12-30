@@ -148,6 +148,10 @@ class Coder(object):
         if not is_handle: save_file.close()    
 
 
+    def reset_state(self):
+        self.state = {}
+
+
     def _get_set_batch_size(self, batch_size=None):
 
         if batch_size is None: 
@@ -157,7 +161,7 @@ class Coder(object):
             
         return batch_size
 
-
+        
     def dump_output(self, data, filename, kind='hidden',
                     batch_size=None, dtype=None, **kwargs):
         """
@@ -231,9 +235,7 @@ class Coder(object):
         Mean cross entropy between input and encode-decoded input.
         """
         loss = function(inputs, self.recode(inputs, **kwargs))
-        return tf.reduce_mean(
-                        tf.reduce_sum(loss,
-                                      reduction_indices=range(1, self.input_dims)))
+        return tf.reduce_mean(loss)
 
 
     def label_cost(self, inputs, labels):
@@ -1096,6 +1098,7 @@ class RNN(Coder):
                      
         self.seq_length = seq_length
         Coder.__init__(self, n_visible=n_visible, n_hidden=n_hidden, **kwargs)
+        self.state = {}
 
 
     def init_params(self, trainable=True, **kwargs):
@@ -1117,9 +1120,9 @@ class RNN(Coder):
 
     def init_train_args(self, **kwargs):
         # To be used for training by tf.Optimizer objects.
-        self.train_args = [tf.placeholder(self.dtype,
+        self.train_args = [tf.placeholder(self.dtype, name='train',
                                           shape=[None, self.n_visible, self.seq_length])]
-        self.input_dims = 2
+        self.input_dims = 3
 
 
     def input_shape(self):
@@ -1147,7 +1150,8 @@ class RNN(Coder):
         return states, self.get_predicted_values(states)
         
 
-    def get_outputs(self, inputs, state, outputs=[], states=[], as_list=False):
+    def get_outputs(self, inputs, state, outputs=[], states=[],
+                    as_list=False, store=False):
         """
         Computes the output values of the RNN for each of input,
         assuming inputs is a batch.
@@ -1155,46 +1159,52 @@ class RNN(Coder):
         i.e. inputs is batch_size x n_visible x seq_size.
 
         Returns the outputs and states.
+
+        store:
+        If True, store final hidden state in self.state['hidden'].        
         """
 
         for row in tf.unpack(tf.transpose(inputs, perm=[2, 0, 1])):
             state, output = self.update(state, row)
             states.append(state)
             outputs.append(output)
-
+        if store:
+            self.state['hidden'] = state
+            self.state['output'] = output
+        
         if not as_list:
             outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
             states = tf.transpose(tf.pack(states), perm=[1, 2, 0])
         return outputs, states
 
 
-    def recode(self, inputs, **kwargs):
-        """
-        Wrapper around get_outputs() to fit recode() signature of parent class.
-        """
-        outputs, states = \
-           self.get_outputs(inputs, None, outputs=[inputs[:, :, 0]],
-                            states=[], as_list=True)
-        return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
-
-
     def get_hidden_values(self, visible, states=None,
-                          precoding=False, as_list=False, **kwargs):
+                          as_list=False, store=False, **kwargs):
         """
         Given visible unit values, return expected hidden unit values.
         """
 
-        hidden = []
-        for row in tf.unpack(tf.transpose(visible, perm=[2, 0, 1])):
-            operand = tf.matmul(row, self.params['Wxh']) + self.params['bhid']
-            if states is not None:
-                operand += tf.matmul(states, self.params['Whh'])
-            hidden.append(operand if precoding else self.coding(operand))
-            states = self.coding(operand) if precoding else hidden[-1]
+        outputs, hidden = self.get_outputs(visible, states, as_list=as_list,
+                                           store=store, outputs=[], states=[])
+        return hidden
 
-        if as_list: return hidden
-        
-        return tf.transpose(tf.pack(hidden), perm=[1, 2, 0])
+
+    def recode(self, inputs, store=False, **kwargs):
+        """
+        Wrapper around get_outputs() to fit recode() signature of parent class.
+        """
+        if 'hidden' in self.state:
+            outputs, states = \
+                self.get_outputs(inputs, self.state['hidden'],
+                                 outputs=[self.state['output']],
+                                 states=[], as_list=True, store=store)
+        else:            
+            outputs, states = \
+                self.get_outputs(inputs, None,
+                                 outputs=[inputs[:, :, 0]],
+                                 states=[], as_list=True, store=store)
+
+        return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
 
 
     def predict_sequence(self, inputs, state, length, as_list=False):
@@ -1261,7 +1271,8 @@ class RNN(Coder):
         for s in sample:
             ends = randint(length, row_len, times)
             for e in ends: inputs.append(s.T[:e])
-
+        n_batches = len(inputs) // batch_size
+        inputs = inputs[:n_batches * batch_size]
         
         # For top half of feature image.
         state = tf.placeholder(self.dtype, [1, self.n_hidden])
@@ -1287,7 +1298,7 @@ class RNN(Coder):
         batch = tf.placeholder(self.dtype, [batch_size, self.n_hidden])
         predicted, _ = self.predict_sequence(None, batch, length)
         outputs = []
-        for index in range(len(states) // batch_size):
+        for index in range(n_batches):
             o = predicted.eval(feed_dict={batch: states[index * batch_size :
                                                         (index+1) * batch_size]})
             outputs.append(arrays.plane(o.swapaxes(1, 2)))
@@ -1356,16 +1367,6 @@ class GRU(RNN):
 
         if not prediction: return new_states
         return new_states, self.get_predicted_values(new_states)
-        
-        
-    def get_hidden_values(self, visible, states=None, as_list=False, **kwargs):
-        """
-        Given visible unit values, return expected hidden unit values.
-        """
-
-        outputs, hidden = self.get_outputs(visible, states, as_list=as_list,
-                                           outputs=[], states=[])
-        return hidden
 
         
 
