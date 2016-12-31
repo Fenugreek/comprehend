@@ -15,8 +15,8 @@ from numpy.random import randint
 
 import tensorflow as tf
 import functions
+from tamarind import arrays
 
-float_dt = tf.float32
 
 def corrupt(dataset, corruption):
     """
@@ -40,22 +40,29 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
     Return average cost function value and rms-loss value on validation
     set by coder object with its current weights.
     """
-    
-    batch = tf.placeholder(coder.dtype, [batch_size] + list(dataset.shape[1:]))
-    loss = coder.rms_loss(batch)
+
+    batch_shape = [batch_size] + list(dataset.shape[1:])
+    batch = tf.placeholder(coder.dtype, batch_shape, name='batch')
+    coder.reset_state()
+    output = coder.recode(batch)
     if costing != tf.squared_difference:
-        cost = coder.cost(*coder.cost_args(batch), function=costing)
+        predicted = tf.placeholder(coder.dtype, shape=batch_shape, name='predicted')
+        cost = costing(batch, predicted)
         
     n_batches = dataset.shape[0] // batch_size
     sum_loss = 0
     sum_cost = 0
     for index in range(n_batches):
-        feed_dict = {batch: dataset[index * batch_size : (index+1) * batch_size]}
-        sum_loss += loss.eval(feed_dict=feed_dict)
+        batch_i = dataset[index * batch_size : (index+1) * batch_size]
+        print(index)
+        recoded = output.eval(feed_dict={batch: batch_i})
+        sum_loss += np.mean(np.mean(arrays.plane((batch_i - recoded)**2),
+                                    axis=1)**.5)
         if costing != tf.squared_difference:
-            sum_cost += cost.eval(feed_dict=feed_dict)
-    if costing == tf.squared_difference: sum_cost = sum_loss
-    
+            costed = cost.eval(feed_dict={batch: batch_i, predicted: recoded})
+            sum_cost += np.mean(costed)
+                
+    if costing == tf.squared_difference: sum_cost = sum_loss    
     return (sum_cost / n_batches, sum_loss / n_batches)
 
 
@@ -109,7 +116,7 @@ def get_target_costs(coder, dataset, targets, batch_size=100, costing=tf.squared
 
 def train(sess, coder, dataset, validation_set, verbose=False,
           training_epochs=10, learning_rate=0.001, batch_size=100,
-          costing=functions.cross_entropy):
+          costing=functions.cross_entropy, bptt=None):
     """
     Train a networks object on given data.
 
@@ -122,22 +129,32 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     validation_set: dataset for monitoring.
     """
 
-    train_step = tf.train.AdamOptimizer(learning_rate)\
-                     .minimize(coder.cost(*coder.train_args, function=costing))
+    kwargs = {'function': costing}
+    if bptt: kwargs['store'] = True
+    cost = coder.cost(*coder.train_args, **kwargs)
+    train_step = tf.train.AdamOptimizer(learning_rate).minimize(cost)
     sess.run(tf.global_variables_initializer())    
 
-    if verbose: print('Initial cost %5.2f r.m.s. loss %.4f' %
+    if verbose: print('Initial cost %.4f r.m.s. loss %.4f' %
                       get_costs(coder, validation_set, batch_size, costing))
     
     n_train_batches = dataset.shape[0] // batch_size
+    if bptt: n_batch_seqs = dataset.shape[2] // bptt
     for epoch in range(training_epochs):
 
         for index in range(n_train_batches):
+            print(index)
             batch = dataset[index * batch_size : (index+1) * batch_size]
-            train_step.run(feed_dict=coder.train_feed(batch))
-
+            if bptt:
+                for seq in range(n_batch_seqs):
+                    batch_seq = batch[:, :, seq * bptt : (seq+1) * bptt]
+                    train_step.run(feed_dict=coder.train_feed(batch_seq))
+                coder.reset_state()
+            else:
+                train_step.run(feed_dict=coder.train_feed(batch))
+                
         if verbose:
-            print('Training epoch %d cost %5.2f r.m.s. loss %.4f ' %
+            print('Training epoch %d cost %.4f r.m.s. loss %.4f ' %
                   ((epoch,) + get_costs(coder, validation_set, batch_size, costing)))
 
 
@@ -196,8 +213,8 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
     valid_set, valid_targets: dataset for monitoring, with associated targets.
     """
 
-    train_args = coder.train_args + [tf.placeholder(float_dt, shape=[None,
-                                                                     coder.n_hidden])]
+    train_args = coder.train_args + [tf.placeholder(coder.dtype,
+                                                    shape=[None, coder.n_hidden])]
     train_step = tf.train.AdamOptimizer(learning_rate)\
                      .minimize(coder.target_cost(*train_args, function=costing))
     sess.run(tf.global_variables_initializer())    
