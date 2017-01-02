@@ -35,31 +35,44 @@ def corrupt(dataset, corruption):
     return corrupted.reshape(dataset.shape)
 
 
-def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy):
+def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy,
+              bptt=None):
     """
     Return average cost function value and rms-loss value on validation
     set by coder object with its current weights.
     """
 
-    batch_shape = [batch_size] + list(dataset.shape[1:])
-    batch = tf.placeholder(coder.dtype, batch_shape, name='batch')
+    batch = tf.placeholder(coder.dtype, name='batch',
+                           shape=[batch_size] + list(coder.input_shape()[1:]))
     coder.reset_state()
-    output = coder.recode(batch)
+    output = coder.recode(batch, store=bptt)
     if costing != tf.squared_difference:
-        predicted = tf.placeholder(coder.dtype, shape=batch_shape, name='predicted')
-        cost = costing(batch, predicted)
+        inputs = tf.placeholder(coder.dtype, name='inputs',
+                                   shape=[batch_size] + list(dataset.shape[1:]))
+        predicted = tf.placeholder(coder.dtype, name='predicted',
+                                   shape=[batch_size] + list(dataset.shape[1:]))
+        cost = costing(inputs, predicted)
         
     n_batches = dataset.shape[0] // batch_size
+    if bptt: n_batch_seqs = dataset.shape[2] // bptt
     sum_loss = 0
     sum_cost = 0
     for index in range(n_batches):
         batch_i = dataset[index * batch_size : (index+1) * batch_size]
-        print(index)
-        recoded = output.eval(feed_dict={batch: batch_i})
+#        print(index)
+        if bptt:
+            recoded = []
+            for seq in range(n_batch_seqs):
+                batch_seq = batch_i[:, :, seq * bptt : (seq+1) * bptt]
+                recoded.append(output.eval(feed_dict={batch: batch_seq}))
+            coder.reset_state()
+            recoded = np.concatenate(recoded, axis=2)
+        else: recoded = output.eval(feed_dict={batch: batch_i})
+        
         sum_loss += np.mean(np.mean(arrays.plane((batch_i - recoded)**2),
                                     axis=1)**.5)
         if costing != tf.squared_difference:
-            costed = cost.eval(feed_dict={batch: batch_i, predicted: recoded})
+            costed = cost.eval(feed_dict={inputs: batch_i, predicted: recoded})
             sum_cost += np.mean(costed)
                 
     if costing == tf.squared_difference: sum_cost = sum_loss    
@@ -135,15 +148,16 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     train_step = tf.train.AdamOptimizer(learning_rate).minimize(cost)
     sess.run(tf.global_variables_initializer())    
 
-    if verbose: print('Initial cost %.4f r.m.s. loss %.4f' %
-                      get_costs(coder, validation_set, batch_size, costing))
+    if verbose:
+        print('Initial cost %.4f r.m.s. loss %.4f' %
+              get_costs(coder, validation_set, batch_size, costing, bptt=bptt))
     
     n_train_batches = dataset.shape[0] // batch_size
     if bptt: n_batch_seqs = dataset.shape[2] // bptt
     for epoch in range(training_epochs):
 
         for index in range(n_train_batches):
-            print(index)
+#            print(index)
             batch = dataset[index * batch_size : (index+1) * batch_size]
             if bptt:
                 for seq in range(n_batch_seqs):
@@ -155,7 +169,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
                 
         if verbose:
             print('Training epoch %d cost %.4f r.m.s. loss %.4f ' %
-                  ((epoch,) + get_costs(coder, validation_set, batch_size, costing)))
+                  ((epoch,) + get_costs(coder, validation_set, batch_size, costing, bptt=bptt)))
 
 
 def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
