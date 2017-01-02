@@ -1091,13 +1091,13 @@ class RNN(Coder):
         return data.reshape((-1, 28, 28)).swapaxes(1, 2)
 
     
-    def __init__(self, n_visible=28, n_hidden=100, seq_length=28, **kwargs):
+    def __init__(self, seq_length=28, **kwargs):
         """
         seq_length is length of sequences used for training.
         """
                      
         self.seq_length = seq_length
-        Coder.__init__(self, n_visible=n_visible, n_hidden=n_hidden, **kwargs)
+        Coder.__init__(self, **kwargs)
         self.state = {}
 
 
@@ -1129,80 +1129,84 @@ class RNN(Coder):
         return [getattr(self, 'batch_size', -1)] + [self.n_visible, self.seq_length]
 
 
-    def get_predicted_values(self, state):
-        return self.coding(tf.matmul(state,
-                                     self.params.get('Why',
-                                                     tf.transpose(self.params['Wxh']))) +
-                           self.params['bvis'])
+    def get_output(self, state):
+        """Compute output y values given state of hidden units."""
+        return self.decoding(tf.matmul(state,
+                                       self.params.get('Why',
+                                           tf.transpose(self.params['Wxh']))) +
+                             self.params['bvis'])
 
         
-    def update(self, states, inputs, prediction=True):
+    def update(self, state, input, output=True):
         """
-        Update states given old states and new inputs.
-        Return new states and outputs corresponding to inputs.
+        Update state given old state (batch_size x n_hidden) and
+        new input (batch_size x n_visible).
+
+        Return new state and output (unless output=False).
         """
 
-        operand = tf.matmul(inputs, self.params['Wxh']) + self.params['bhid']
-        if states is not None: operand += tf.matmul(states, self.params['Whh'])
-        states = self.coding(operand)
+        operand = tf.matmul(input, self.params['Wxh']) + self.params['bhid']
+        if state is not None: operand += tf.matmul(state, self.params['Whh'])
+        state = self.coding(operand)
 
-        if not prediction: return states
-        return states, self.get_predicted_values(states)
+        if not output: return state
+        return state, self.get_output(state)
         
 
-    def get_outputs(self, inputs, state, outputs=[], states=[],
+    def seq_update(self, inputs, state, outputs=[], states=[],
                     as_list=False, store=False):
         """
-        Computes the output values of the RNN for each of input,
-        assuming inputs is a batch.
-        
+        Run the RNN on a sequence of inputs.
         i.e. inputs is batch_size x n_visible x seq_size.
 
-        Returns the outputs and states.
+        Returns the corresponding states and outputs (unless predict=False).
 
         store:
         If True, store final hidden state in self.state['hidden'].        
         """
 
         for row in tf.unpack(tf.transpose(inputs, perm=[2, 0, 1])):
-            state, output = self.update(state, row)
+            if outputs is None:
+                state = self.update(state, row, output=False)
+            else:
+                state, output = self.update(state, row)
+                outputs.append(output)
             states.append(state)
-            outputs.append(output)
         if store:
             self.state['hidden'] = state
-            self.state['output'] = output
+            if outputs is not None: self.state['output'] = output
         
         if not as_list:
-            outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
             states = tf.transpose(tf.pack(states), perm=[1, 2, 0])
-        return outputs, states
+            if outputs is not None:
+                outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
+
+        if outputs is None: return states
+        else: return outputs, states
 
 
-    def get_hidden_values(self, visible, states=None,
+    def get_hidden_values(self, inputs, state=None,
                           as_list=False, store=False, **kwargs):
-        """
-        Given visible unit values, return expected hidden unit values.
-        """
-
-        outputs, hidden = self.get_outputs(visible, states, as_list=as_list,
-                                           store=store, outputs=[], states=[])
-        return hidden
+        """inputs is batch_size x n_visible x seq_size."""
+        
+        return self.seq_update(inputs, state, as_list=as_list,
+                               store=store, outputs=None, states=[])
 
 
     def recode(self, inputs, store=False, **kwargs):
         """
-        Wrapper around get_outputs() to fit recode() signature of parent class.
+        Wrapper around seq_update() to fit recode() signature of parent class.
         """
         if 'hidden' in self.state:
             outputs, states = \
-                self.get_outputs(inputs, self.state['hidden'],
-                                 outputs=[self.state['output']],
-                                 states=[], as_list=True, store=store)
+                self.seq_update(inputs, self.state['hidden'],
+                                outputs=[self.state['output']],
+                                states=[], as_list=True, store=store)
         else:            
             outputs, states = \
-                self.get_outputs(inputs, None,
-                                 outputs=[inputs[:, :, 0]],
-                                 states=[], as_list=True, store=store)
+                self.seq_update(inputs, None,
+                                outputs=[inputs[:, :, 0]],
+                                states=[], as_list=True, store=store)
 
         return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
 
@@ -1218,10 +1222,10 @@ class RNN(Coder):
 
         if inputs is None:
             states = [state]
-            outputs = [self.get_predicted_values(state)]
+            outputs = [self.get_output(state)]
         else:
             outputs, states = \
-               self.get_outputs(inputs, state, [inputs[:, :, 0]], as_list=True)
+               self.seq_update(inputs, state, [inputs[:, :, 0]], as_list=True)
             state = states[-1]
             
         for index in range(1, length):
@@ -1277,7 +1281,7 @@ class RNN(Coder):
         # For top half of feature image.
         state = tf.placeholder(self.dtype, [1, self.n_hidden])
         visible = tf.placeholder(self.dtype, [1, self.n_visible])
-        hidden = self.update(state, visible, prediction=False)
+        hidden = self.update(state, visible, output=False)
         zero_state = np.zeros([1, self.n_hidden], dtype=self.dtype.as_numpy_dtype)
         states = []
         for sample in inputs:
@@ -1349,26 +1353,33 @@ class GRU(RNN):
                                          name='Uhh', trainable=trainable, dtype=self.dtype)
 
 
-    def update(self, states, inputs, prediction=True):
+    def update(self, state, input, output=True):
 
-        u_gate = tf.matmul(inputs, self.params['Uxh'])
-        if states is not None:
-            u_gate += tf.matmul(states, self.params['Uhh'])
-            r_gate = tf.sigmoid(tf.matmul(inputs, self.params['Rxh']) + 
-                                tf.matmul(states, self.params['Rhh']))
+        u_gate = tf.matmul(input, self.params['Uxh'])
+        if state is not None:
+            u_gate += tf.matmul(state, self.params['Uhh'])
+            r_gate = tf.sigmoid(tf.matmul(input, self.params['Rxh']) + 
+                                tf.matmul(state, self.params['Rhh']))
         u_gate = tf.sigmoid(u_gate)
 
-        operand = tf.matmul(inputs, self.params['Wxh']) + self.params['bhid']
-        if states is not None:
-            operand += tf.matmul(states * r_gate, self.params['Whh'])
-        new_states = self.coding(operand) * (1. - u_gate)
-        if states is not None:
-            new_states += states  * u_gate
+        operand = tf.matmul(input, self.params['Wxh']) + self.params['bhid']
+        if state is not None:
+            operand += tf.matmul(state * r_gate, self.params['Whh'])
+        new_state = self.coding(operand) * (1. - u_gate)
+        if state is not None:
+            new_state += state * u_gate
 
-        if not prediction: return new_states
-        return new_states, self.get_predicted_values(new_states)
+        if not output: return new_state
+        return new_state, self.get_output(new_state)
 
         
+class GRUtie(GRU):
+    """Recurrent neural network with gradient recurrent units, tied weights."""
+
+    param_names = ['Wxh', 'Whh', 'bhid', 'bvis',
+                   'Rxh', 'Rhh', 'Uxh', 'Uhh']
+
+
 
 class VAE(Coder):
     """Variational Autoencoder."""
