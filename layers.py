@@ -14,7 +14,7 @@ class Layers(networks.Conv):
     """
     
     def __init__(self, coders=None, fromfile=None, batch_size=100,
-                 coding=tf.nn.elu, decoding=None, verbose=False, **kwargs):
+                 verbose=False, **kwargs):
         """
         Provide a list of networks objects <coders>, or a saved params file.
         """
@@ -27,8 +27,8 @@ class Layers(networks.Conv):
                 try:
                     coder_class = cPickle.load(save_file)
                     self.coders.append(coder_class(fromfile=save_file,
-                                                   batch_size=batch_size, verbose=verbose,
-                                                   coding=coding, decoding=decoding, **kwargs))
+                                                   batch_size=batch_size,
+                                                   verbose=verbose, **kwargs))
                 except EOFError: break
             if not is_handle: save_file.close()
 
@@ -73,6 +73,10 @@ class Layers(networks.Conv):
 
     def output_shape(self, **kwargs):
         return self.coders[-1].output_shape(**kwargs)
+
+
+    def reset_state(self):
+        for c in self.coders: c.reset_state()
 
 
     def save_params(self, tofile):
@@ -264,3 +268,101 @@ class DRBM(Layers, networks.RBM):
             h = coder.sample_v_given_h(h)
         return h
 
+
+class RNN(Layers, networks.RNN):
+    """
+    Multi-layer RNN -- multiple layers of RNN, where output values
+    of each layer is fed to the next.
+    """
+    
+    def recode(self, inputs, skips=None, store=False, layer=-1, **kwargs):
+
+        if layer < 0: layer += len(self.coders)
+        coders = self.coders[:layer+1]
+
+        values = coders[0].recode(inputs, skips=skips, store=store, **kwargs)
+        for i in range(1, len(coders)):
+            values = coders[i].recode(values, skips=skips, store=store, **kwargs)
+
+        return values
+
+
+class RNNint(Layers, networks.RNN):
+    """
+    Multi-layer 'internal' RNN -- multiple layers of RNN, where hidden values
+    of each layer is fed as input to the next.
+    """
+    
+    def recode(self, inputs, skips=None, store=False, layer=-1, **kwargs):
+
+        if layer < 0: layer += len(self.coders)
+        coders = self.coders[:layer+1]
+
+        values = inputs
+        for c in coders[:-1]:
+            values = c.get_hidden_values(values, state=c.state.get('hidden'),
+                                         skips=skips, store=store, **kwargs)
+
+        top = coders[-1]
+        if 'hidden' in top.state:
+            outputs, states = \
+                top.seq_update(values, top.state['hidden'], skips=skips,
+                               outputs=[top.state['output']],
+                               states=[], as_list=True, store=store)
+        else:            
+            outputs, states = \
+                top.seq_update(values, None, skips=skips,
+                               outputs=[inputs[:, :, 0]],
+                               states=[], as_list=True, store=store)
+
+        return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
+
+
+    def predict_sequence(self, inputs, state, length, as_list=False):
+        """
+        Given initial sequence of inputs, extend by given length, feeding
+        RNN outputs back to itself.
+
+        Return full output states.
+        Specify initial state via <state>. Can be None.
+        """
+
+        coders = self.coders
+        
+        if inputs is None:
+            outputs = [coders[-1].get_output(state[-1])]
+            new_states = [state[i] for i in range(len(coders))]
+        else:
+            
+            new_states = []
+            values = inputs
+            for i in range(len(coders) - 1):
+                state_i = None if state is None else state[i]
+                new_states.append(coders[i].seq_update(values, state=state_i, states=[],
+                                                       outputs=None, as_list=True))
+                values = tf.transpose(tf.pack(new_states[-1]), perm=[1, 2, 0])
+
+            outputs, states = coders[-1].seq_update(values,
+                                   state=None if state is None else state[-1],
+                                   outputs=[inputs[:, :, 0]], states=[], as_list=True)
+            new_states.append(states)
+            
+            
+        for index in range(1, length):
+            value = outputs[-1]
+            for i in range(len(coders) - 1):
+                states_i = new_states[i]
+                states_i.append(coders[i].update(states_i[-1], value,
+                                                 output=False))
+                value = states_i[-1]
+
+            state, output = coders[-1].update(new_states[-1][-1], value)
+            outputs.append(output)
+            new_states[-1].append(state)
+            
+        if not as_list:
+            outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
+            new_states = [tf.transpose(tf.pack(states), perm=[1, 2, 0])
+                          for states in new_states]
+            
+        return outputs, new_states

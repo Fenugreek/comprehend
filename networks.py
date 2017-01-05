@@ -1083,7 +1083,8 @@ class ERBM(RBM):
 class RNN(Coder):
     """Recurrent neural network."""
 
-    param_names = ['Wxh', 'Whh', 'Why', 'bhid', 'bvis']
+    param_names = ['Wxh', 'Whh', 'Why', 'bhid', 'bout']
+    attr_names = Coder.attr_names + ['n_output']
 
     @staticmethod
     def prep_mnist(data):
@@ -1091,13 +1092,15 @@ class RNN(Coder):
         return data.reshape((-1, 28, 28)).swapaxes(1, 2)
 
     
-    def __init__(self, seq_length=28, **kwargs):
+    def __init__(self, seq_length=28, n_output=None, coding=tf.tanh, **kwargs):
         """
         seq_length is length of sequences used for training.
         """
                      
         self.seq_length = seq_length
-        Coder.__init__(self, **kwargs)
+        if not kwargs.get('fromfile'):
+            self.n_output = n_output or kwargs['n_visible']
+        Coder.__init__(self, coding=coding, **kwargs)
         self.state = {}
 
 
@@ -1109,13 +1112,13 @@ class RNN(Coder):
                                          name='Whh', trainable=trainable, dtype=self.dtype)
 
         if 'Why' in type(self).param_names:
-            self.params['Why'] = xavier_init(self.n_hidden, self.n_visible,
+            self.params['Why'] = xavier_init(self.n_hidden, self.n_output,
                                              name='Why', trainable=trainable, dtype=self.dtype)
 
         self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=self.dtype),
                                           name='bhid', trainable=trainable)
-        self.params['bvis'] = tf.Variable(tf.zeros([self.n_visible], dtype=self.dtype),
-                                          name='bvis', trainable=trainable)
+        self.params['bout'] = tf.Variable(tf.zeros([self.n_output], dtype=self.dtype),
+                                          name='bout', trainable=trainable)
 
 
     def init_train_args(self, **kwargs):
@@ -1134,7 +1137,7 @@ class RNN(Coder):
         return self.decoding(tf.matmul(state,
                                        self.params.get('Why',
                                            tf.transpose(self.params['Wxh']))) +
-                             self.params['bvis'])
+                             self.params['bout'])
 
         
     def update(self, state, input, output=True):
@@ -1153,7 +1156,7 @@ class RNN(Coder):
         return state, self.get_output(state)
         
 
-    def seq_update(self, inputs, state, outputs=[], states=[],
+    def seq_update(self, inputs, state, skips=None, outputs=None, states=None,
                     as_list=False, store=False):
         """
         Run the RNN on a sequence of inputs.
@@ -1165,13 +1168,20 @@ class RNN(Coder):
         If True, store final hidden state in self.state['hidden'].        
         """
 
-        for row in tf.unpack(tf.transpose(inputs, perm=[2, 0, 1])):
+        if states is None: states = []
+        for i, row in enumerate(tf.unpack(tf.transpose(inputs, perm=[2, 0, 1]))):
+            if skips and (i / skips) % 2:
+                input = outputs[-1] if outputs is not None else \
+                        self.get_output(states[-1])
+            else: input = row
+            
             if outputs is None:
-                state = self.update(state, row, output=False)
+                state = self.update(state, input, output=False)
             else:
-                state, output = self.update(state, row)
+                state, output = self.update(state, input)
                 outputs.append(output)
             states.append(state)
+            
         if store:
             self.state['hidden'] = state
             if outputs is not None: self.state['output'] = output
@@ -1185,26 +1195,26 @@ class RNN(Coder):
         else: return outputs, states
 
 
-    def get_hidden_values(self, inputs, state=None,
+    def get_hidden_values(self, inputs, state=None, skips=None,
                           as_list=False, store=False, **kwargs):
         """inputs is batch_size x n_visible x seq_size."""
         
-        return self.seq_update(inputs, state, as_list=as_list,
-                               store=store, outputs=None, states=[])
+        return self.seq_update(inputs, state, skips=skips, as_list=as_list,
+                               store=store, outputs=None, states=None)
 
 
-    def recode(self, inputs, store=False, **kwargs):
+    def recode(self, inputs, skips=None, store=False, **kwargs):
         """
         Wrapper around seq_update() to fit recode() signature of parent class.
         """
         if 'hidden' in self.state:
             outputs, states = \
-                self.seq_update(inputs, self.state['hidden'],
+                self.seq_update(inputs, self.state['hidden'], skips=skips,
                                 outputs=[self.state['output']],
                                 states=[], as_list=True, store=store)
         else:            
             outputs, states = \
-                self.seq_update(inputs, None,
+                self.seq_update(inputs, None, skips=skips,
                                 outputs=[inputs[:, :, 0]],
                                 states=[], as_list=True, store=store)
 
@@ -1216,7 +1226,7 @@ class RNN(Coder):
         Given initial sequence of inputs, extend by given length, feeding
         RNN outputs back to itself.
 
-        Return full output and ending state.
+        Return full output states.
         Specify initial state via <state>. Can be None.
         """
 
@@ -1225,7 +1235,7 @@ class RNN(Coder):
             outputs = [self.get_output(state)]
         else:
             outputs, states = \
-               self.seq_update(inputs, state, [inputs[:, :, 0]], as_list=True)
+               self.seq_update(inputs, state, outputs=[inputs[:, :, 0]], as_list=True)
             state = states[-1]
             
         for index in range(1, length):
@@ -1326,14 +1336,14 @@ class RNN(Coder):
 
 class RNNtie(RNN):
     """Recurrent neural network with tied weights."""
-    param_names = ['Wxh', 'Whh', 'bhid', 'bvis']
+    param_names = ['Wxh', 'Whh', 'bhid', 'bout']
 
 
 
 class GRU(RNN):
     """Recurrent neural network with gradient recurrent units."""
 
-    param_names = ['Wxh', 'Whh', 'Why', 'bhid', 'bvis',
+    param_names = ['Wxh', 'Whh', 'Why', 'bhid', 'bout',
                    'Rxh', 'Rhh', 'Uxh', 'Uhh']
 
 
@@ -1376,7 +1386,7 @@ class GRU(RNN):
 class GRUtie(GRU):
     """Recurrent neural network with gradient recurrent units, tied weights."""
 
-    param_names = ['Wxh', 'Whh', 'bhid', 'bvis',
+    param_names = ['Wxh', 'Whh', 'bhid', 'bout',
                    'Rxh', 'Rhh', 'Uxh', 'Uhh']
 
 
