@@ -42,36 +42,42 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy,
     set by coder object with its current weights.
     """
 
-    batch = tf.placeholder(coder.dtype, name='batch',
-                           shape=[batch_size] + list(coder.input_shape()[1:]))
+    shape = [batch_size] + list(coder.input_shape()[1:])
+    batch = tf.placeholder(coder.dtype, name='batch', shape=shape)
+
     coder.reset_state()
     output = coder.recode(batch, store=bptt)
+
     if costing != tf.squared_difference:
-        inputs = tf.placeholder(coder.dtype, name='inputs',
-                                   shape=[batch_size] + list(dataset.shape[1:]))
-        predicted = tf.placeholder(coder.dtype, name='predicted',
-                                   shape=[batch_size] + list(dataset.shape[1:]))
+        inputs = tf.placeholder(coder.dtype, name='inputs', shape=shape)
+        predicted = tf.placeholder(coder.dtype, name='predicted', shape=shape)
         cost = costing(inputs, predicted)
         
     n_batches = dataset.shape[0] // batch_size
     if bptt: n_batch_seqs = dataset.shape[2] // bptt
+
     sum_loss = 0
     sum_cost = 0
     for index in range(n_batches):
         batch_i = dataset[index * batch_size : (index+1) * batch_size]
-#        print(index)
+
         if bptt:
             recoded = []
             for seq in range(n_batch_seqs):
                 batch_seq = batch_i[:, :, seq * bptt : (seq+1) * bptt]
                 recoded.append(output.eval(feed_dict={batch: batch_seq}))
+                if costing != tf.squared_difference:
+                    costed = cost.eval(feed_dict={inputs: batch_seq,
+                                                  predicted: recoded[-1]})
+                    sum_cost += np.mean(costed) / n_batch_seqs
+
             coder.reset_state()
             recoded = np.concatenate(recoded, axis=2)
         else: recoded = output.eval(feed_dict={batch: batch_i})
         
         sum_loss += np.mean(np.mean(arrays.plane((batch_i - recoded)**2),
                                     axis=1)**.5)
-        if costing != tf.squared_difference:
+        if costing != tf.squared_difference and not bptt:
             costed = cost.eval(feed_dict={inputs: batch_i, predicted: recoded})
             sum_cost += np.mean(costed)
                 
@@ -129,7 +135,7 @@ def get_target_costs(coder, dataset, targets, batch_size=100, costing=tf.squared
 
 def train(sess, coder, dataset, validation_set, verbose=False,
           training_epochs=10, learning_rate=0.001, batch_size=100,
-          costing=functions.cross_entropy, bptt=None):
+          costing=functions.cross_entropy, bptt=None, skips=None):
     """
     Train a networks object on given data.
 
@@ -142,10 +148,19 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     validation_set: dataset for monitoring.
     """
 
-    kwargs = {'function': costing}
+    kwargs = {'function': costing, 'skips': skips}
     if bptt: kwargs['store'] = True
     cost = coder.cost(*coder.train_args, **kwargs)
-    train_step = tf.train.AdamOptimizer(learning_rate).minimize(cost)
+    opt = tf.train.AdamOptimizer(learning_rate)
+    
+#    train_step = tf.train.AdamOptimizer(learning_rate).minimize(cost)
+    grads_vars = []
+    for grad_var in opt.compute_gradients(cost):
+        if grad_var[0] is None:
+            print 'Warning: no gradient for variable %s' % grad_var[1].name
+            continue
+        grads_vars.append((tf.clip_by_value(grad_var[0], -1., 1.), grad_var[1]))
+    train_step = opt.apply_gradients(grads_vars)
     sess.run(tf.global_variables_initializer())    
 
     if verbose:
@@ -251,3 +266,29 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
             print('Training epoch %d cost/r.m.s. error %5.3f' %
                   (epoch, get_target_costs(coder, valid_set, valid_targets,
                                             batch_size, costing)))
+
+def rnn_extend(sess, coder, inputs, length=1):
+    """
+    inputs is batch_size x n_consecutive_seqs x n_visible x seq_length.
+    """
+    
+    shape = inputs.shape
+    n_seqs =  shape[1]
+    batch = tf.placeholder(coder.dtype, name='batch_seq',
+                           shape=(shape[0], shape[2], shape[3]))
+
+    coder.reset_state()
+    output = coder.recode(batch, store=True)
+
+    outputs = []
+    for index in range(n_seqs):
+        batch_seq = inputs[:, index, :, :]
+        o, s = sess.run([output, coder.get_state()], feed_dict={batch: batch_seq})
+        outputs.append(o)
+
+
+    outputs.append(coder.predict_sequence(None,
+                                          s['hidden'],
+                                          length=length*shape[3]).eval())
+
+    return outputs
