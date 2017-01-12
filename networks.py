@@ -1132,6 +1132,13 @@ class RNN(Coder):
         return [getattr(self, 'batch_size', -1)] + [self.n_visible, self.seq_length]
 
 
+    def get_state(self):
+        return self.state
+
+    def set_state(self, state):
+        self.state = state
+
+    
     def get_output(self, state):
         """Compute output y values given state of hidden units."""
         return self.decoding(tf.matmul(state,
@@ -1183,8 +1190,9 @@ class RNN(Coder):
             states.append(state)
             
         if store:
-            self.state['hidden'] = state
-            if outputs is not None: self.state['output'] = output
+            store_state = {'hidden': state}
+            if outputs is not None: store_state['output'] = output
+            self.set_state(store_state)
         
         if not as_list:
             states = tf.transpose(tf.pack(states), perm=[1, 2, 0])
@@ -1207,10 +1215,12 @@ class RNN(Coder):
         """
         Wrapper around seq_update() to fit recode() signature of parent class.
         """
-        if 'hidden' in self.state:
+        
+        state = self.get_state()
+        if 'hidden' in state:
             outputs, states = \
-                self.seq_update(inputs, self.state['hidden'], skips=skips,
-                                outputs=[self.state['output']],
+                self.seq_update(inputs, state['hidden'], skips=skips,
+                                outputs=[state['output']],
                                 states=[], as_list=True, store=store)
         else:            
             outputs, states = \
@@ -1221,17 +1231,18 @@ class RNN(Coder):
         return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
 
 
-    def predict_sequence(self, inputs, state, length, as_list=False):
+    def predict_sequence(self, inputs, state, length,
+                         as_list=False, ret_states=False):
         """
         Given initial sequence of inputs, extend by given length, feeding
         RNN outputs back to itself.
 
-        Return full output states.
+        Return full outputs, and states if <ret_states> is True.
         Specify initial state via <state>. Can be None.
         """
 
         if inputs is None:
-            states = [state]
+            if ret_states: states = [state]
             outputs = [self.get_output(state)]
         else:
             outputs, states = \
@@ -1241,12 +1252,14 @@ class RNN(Coder):
         for index in range(1, length):
             state, output = self.update(state, outputs[-1])
             outputs.append(output)
-            states.append(state)
+            if ret_states: states.append(state)
             
         if not as_list:
             outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
-            states = tf.transpose(tf.pack(states), perm=[1, 2, 0])
-        return outputs, states
+            if ret_states: states = tf.transpose(tf.pack(states), perm=[1, 2, 0])
+
+        if ret_states: return outputs, states
+        else: return outputs
 
 
     def features(self, sample, length=None, batch_size=None, scale=True):
