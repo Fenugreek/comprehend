@@ -70,10 +70,8 @@ class Layers(networks.Conv):
     def input_shape(self):
         return self.coders[0].input_shape()
 
-
     def output_shape(self, **kwargs):
         return self.coders[-1].output_shape(**kwargs)
-
 
     def reset_state(self):
         for c in self.coders: c.reset_state()
@@ -271,98 +269,62 @@ class DRBM(Layers, networks.RBM):
 
 class RNN(Layers, networks.RNN):
     """
-    Multi-layer RNN -- multiple layers of RNN, where output values
-    of each layer is fed to the next.
-    """
-    
-    def recode(self, inputs, skips=None, store=False, layer=-1, **kwargs):
-
-        if layer < 0: layer += len(self.coders)
-        coders = self.coders[:layer+1]
-
-        values = coders[0].recode(inputs, skips=skips, store=store, **kwargs)
-        for i in range(1, len(coders)):
-            values = coders[i].recode(values, skips=skips, store=store, **kwargs)
-
-        return values
-
-
-class RNNint(Layers, networks.RNN):
-    """
     Multi-layer 'internal' RNN -- multiple layers of RNN, where hidden values
     of each layer is fed as input to the next.
-    """
-    
-    def recode(self, inputs, skips=None, store=False, layer=-1, **kwargs):
+    """    
 
-        if layer < 0: layer += len(self.coders)
-        coders = self.coders[:layer+1]
-
-        values = inputs
-        for c in coders[:-1]:
-            values = c.get_hidden_values(values, state=c.state.get('hidden'),
-                                         skips=skips, store=store, **kwargs)
-
-        top = coders[-1]
-        if 'hidden' in top.state:
-            outputs, states = \
-                top.seq_update(values, top.state['hidden'], skips=skips,
-                               outputs=[top.state['output']],
-                               states=[], as_list=True, store=store)
-        else:            
-            outputs, states = \
-                top.seq_update(values, None, skips=skips,
-                               outputs=[inputs[:, :, 0]],
-                               states=[], as_list=True, store=store)
-
-        return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
-
-
-    def predict_sequence(self, inputs, state, length, as_list=False):
+    def get_state(self):
         """
-        Given initial sequence of inputs, extend by given length, feeding
-        RNN outputs back to itself.
-
-        Return full output states.
-        Specify initial state via <state>. Can be None.
+        State is constructed from the state of each layer.
+        Mirrors state dict in each layer, except values are now lists, one per layer.
+        Exception: output statee, which is output values of top layer only.
         """
-
-        coders = self.coders
         
-        if inputs is None:
-            outputs = [coders[-1].get_output(state[-1])]
-            new_states = [state[i] for i in range(len(coders))]
-        else:
-            
-            new_states = []
-            values = inputs
-            for i in range(len(coders) - 1):
-                state_i = None if state is None else state[i]
-                new_states.append(coders[i].seq_update(values, state=state_i, states=[],
-                                                       outputs=None, as_list=True))
-                values = tf.transpose(tf.pack(new_states[-1]), perm=[1, 2, 0])
+        states = [c.get_state() for c in self.coders]
+        state = {}
+        for key in states[0].keys():
+            state[key] = [s[key] for s in states]
 
-            outputs, states = coders[-1].seq_update(values,
-                                   state=None if state is None else state[-1],
-                                   outputs=[inputs[:, :, 0]], states=[], as_list=True)
-            new_states.append(states)
+        if 'output' not in state and 'output' in states[-1]:
+            state['output'] = states[-1]['output']
             
-            
-        for index in range(1, length):
-            value = outputs[-1]
-            for i in range(len(coders) - 1):
-                states_i = new_states[i]
-                states_i.append(coders[i].update(states_i[-1], value,
-                                                 output=False))
-                value = states_i[-1]
+        return state
 
-            state, output = coders[-1].update(new_states[-1][-1], value)
-            outputs.append(output)
-            new_states[-1].append(state)
-            
-        if not as_list:
-            outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
-            new_states = [tf.transpose(tf.pack(states), perm=[1, 2, 0])
-                          for states in new_states]
-            
-        return outputs, new_states
+
+    def set_state(self, state):
+        
+        if 'hidden' in state:
+            for c, s in zip(self.coders, state['hidden']):
+                c.state['hidden'] = s
+        if 'output' in state:
+            self.coders[-1].state['output'] = state['output']
+
+    
+    def get_output(self, state):
+        """
+        state is a list of states, one for each layer.
+        Return output of top layer.
+        """
+        return self.coders[-1].get_output(state[-1])
+        
+
+    def update(self, state, input, output=True):
+        """
+        state is a list of states, one for each layer.
+        Return new list of states, and optionally output of top layer.
+        """
+
+        new_state = []
+        values = input
+        for i in range(len(self.coders)):
+            values = self.coders[i].update(None if state is None else state[i],
+                                           values, output=False)
+            new_state.append(values)
+
+        if not output: return new_state
+        return new_state, self.coders[-1].get_output(new_state[-1])
+
+
+    def recode(self, *args, **kwargs):
+        # Avoid executing layers.Layers.recode().
+        return networks.RNN.recode(self, *args, **kwargs)
