@@ -116,21 +116,45 @@ def get_target_costs(coder, dataset, targets, batch_size=100, costing=tf.squared
     """
 
     batch = tf.placeholder(coder.dtype, [batch_size] + list(dataset.shape[1:]))
-    targets_batch = tf.placeholder(coder.dtype, [batch_size] + list(targets.shape[1:]))
-
     predicted = coder.get_hidden_values(batch)
-    cost = tf.reduce_mean(costing(targets_batch, predicted))
+    if costing != tf.squared_difference:
+        shape = [batch_size] + list(targets.shape[1:])
+        batch_h = tf.placeholder(coder.dtype, name='batch_h', shape=shape)
+        batch_t = tf.placeholder(coder.dtype, name='batch_t', shape=shape)
+        cost = tf.reduce_mean(costing(batch_h, batch_t))
     
     n_batches = dataset.shape[0] // batch_size
     sum_cost = 0.
+    sum_loss = 0
     for index in range(n_batches):
-        feed_dict = {batch: dataset[index * batch_size : (index+1) * batch_size],
-                     targets_batch: targets[index * batch_size : (index+1) * batch_size]}
-        sum_cost += cost.eval(feed_dict=feed_dict)
-    
-    ave_cost = sum_cost / n_batches
-    if costing == tf.squared_difference: ave_cost **= .5
-    return ave_cost
+        hidden = predicted.eval(feed_dict={batch: dataset[index * batch_size :
+                                                          (index+1) * batch_size]})
+        actual = targets[index * batch_size : (index+1) * batch_size]
+        sum_loss += np.mean(np.mean(arrays.plane((actual - hidden)**2),
+                                    axis=1)**.5)
+        
+        if costing != tf.squared_difference:
+            costed = cost.eval(feed_dict={batch_h: hidden, batch_t: actual})
+            sum_cost += np.mean(costed)
+
+    if costing == tf.squared_difference: sum_cost = sum_loss    
+    return (sum_cost / n_batches, sum_loss / n_batches)
+
+
+def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1)):
+    """Return opertation that trains parameters, given cost tensor."""
+
+    opt = tf.train.AdamOptimizer(learning_rate)
+    if grad_clips is None: return opt.minimize(cost)
+
+    grads_vars = []
+    for grad_var in opt.compute_gradients(cost):
+        if grad_var[0] is None:
+#            print 'Warning: no gradient for variable %s' % grad_var[1].name
+            continue
+        grads_vars.append((tf.clip_by_value(grad_var[0], -1., 1.), grad_var[1]))
+
+    return opt.apply_gradients(grads_vars)
 
 
 def train(sess, coder, dataset, validation_set, verbose=False,
@@ -153,14 +177,7 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     cost = coder.cost(*coder.train_args, **kwargs)
     opt = tf.train.AdamOptimizer(learning_rate)
     
-#    train_step = tf.train.AdamOptimizer(learning_rate).minimize(cost)
-    grads_vars = []
-    for grad_var in opt.compute_gradients(cost):
-        if grad_var[0] is None:
-            print 'Warning: no gradient for variable %s' % grad_var[1].name
-            continue
-        grads_vars.append((tf.clip_by_value(grad_var[0], -1., 1.), grad_var[1]))
-    train_step = opt.apply_gradients(grads_vars)
+    train_step = get_trainer(cost, learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
     if verbose:
@@ -203,8 +220,8 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
     """
 
     train_args = coder.train_args + [tf.placeholder(tf.int32, shape=[None])]
-    train_step = tf.train.AdamOptimizer(learning_rate)\
-                     .minimize(coder.label_cost(*train_args))
+    train_step = get_trainer(coder.label_cost(*train_args),
+                             learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
     if verbose:
@@ -244,12 +261,12 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
 
     train_args = coder.train_args + [tf.placeholder(coder.dtype,
                                                     shape=[None, coder.n_hidden])]
-    train_step = tf.train.AdamOptimizer(learning_rate)\
-                     .minimize(coder.target_cost(*train_args, function=costing))
+    train_step = get_trainer(coder.target_cost(*train_args, function=costing),
+                             learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
     if verbose:
-        print('Initial cost/r.m.s error %5.3f' %
+        print('Initial cost %.4f r.m.s. loss %.4f' %
               get_target_costs(coder, valid_set, valid_targets, batch_size, costing))
 
     n_train_batches = dataset.shape[0] // batch_size
@@ -263,11 +280,12 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
             train_step.run(feed_dict=train_feed)
 
         if verbose:
-            print('Training epoch %d cost/r.m.s. error %5.3f' %
-                  (epoch, get_target_costs(coder, valid_set, valid_targets,
-                                            batch_size, costing)))
+            print('Training epoch %d cost %.4f r.m.s. loss %.4f ' %
+                  ((epoch,) + get_target_costs(coder, valid_set, valid_targets,
+                                               batch_size, costing)))
 
-def rnn_extend(sess, coder, inputs, length=1):
+
+def rnn_extend(sess, coder, inputs, skips=None, length=1):
     """
     inputs is batch_size x n_consecutive_seqs x n_visible x seq_length.
     """
@@ -278,7 +296,7 @@ def rnn_extend(sess, coder, inputs, length=1):
                            shape=(shape[0], shape[2], shape[3]))
 
     coder.reset_state()
-    output = coder.recode(batch, store=True)
+    output = coder.recode(batch, store=True, skips=skips)
 
     outputs = []
     for index in range(n_seqs):
@@ -291,4 +309,4 @@ def rnn_extend(sess, coder, inputs, length=1):
                                           s['hidden'],
                                           length=length*shape[3]).eval())
 
-    return outputs
+    return np.array(outputs)
