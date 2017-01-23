@@ -32,45 +32,51 @@ target_fn = data_fn
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', metavar='<model>', 
-                       help='network architecture to load from networks module. Auto, Denoising, RBM, RNN, or VAE.')
+                        help='network architecture to load from networks module. Auto, Denoising, RBM, RNN, or VAE.')
     parser.add_argument('--module', metavar='<model>', default='comprehend.networks',
-                       help='network architecture to load from networks module. Auto, Denoising, RBM, RNN, or VAE.')
+                        help='network architecture to load from networks module. Auto, Denoising, RBM, RNN, or VAE.')
     parser.add_argument('--fromfile', metavar='<filename.dat>',
-                       help='previous params.dat file to load from and resume training.')
+                        help='previous params.dat file to load from and resume training.')
     parser.add_argument('--add', metavar='<model>',
-                       help='network layer to add to architecture loaded fromfile.')
+                        help='network layer to add to architecture loaded fromfile.')
+
     parser.add_argument('--visible', metavar='N', type=int,
-                       help='number of visible units; inferred from data if not specified')
+                        help='number of visible units; inferred from data if not specified')
     parser.add_argument('--hidden', metavar='N', type=int, default=500,
-                       help='number of hidden units')
-    parser.add_argument('--data', metavar='<filename.blp>',
-                       help='data file to use for training.')
-    parser.add_argument('--labels', metavar='<filename.blp>',
-                       help='data file with labels for classification training.')
-    parser.add_argument('--targets', metavar='<filename.blp>',
-                       help='data file with targets for mapping training.')
-    parser.add_argument('--batch', metavar='N', type=int, default=100,
-                       help='size of each mini-batch')
-    parser.add_argument('--validation', metavar='R', type=float, default=.1,
-                       help='fraction of dataset to use as validation set.')
+                        help='number of hidden units')
     parser.add_argument('--options', metavar='<option>=<integer>[,<integer>...]', nargs='+',
-                       help='options to pass to constructor of network architecture; only integers supported for now.')
-    parser.add_argument('--loss', action='store_true',
-                        help='Print r.m.s. loss on validation data.')
+                        help='options to pass to constructor of network architecture; only integers supported for now.')
+
+    parser.add_argument('--data', metavar='<filename.blp>',
+                        help='data file to use for training.')
+    parser.add_argument('--labels', metavar='<filename.blp>',
+                        help='data file with labels for classification training.')
+    parser.add_argument('--targets', metavar='<filename.blp>',
+                        help='data file with targets for mapping training.')
+    parser.add_argument('--validation', metavar='R', type=float, default=.08,
+                        help='fraction of dataset to use as validation set.')
+
     
-    parser.add_argument('--epochs', metavar='N', type=int, default=1,
-                       help='No. of epochs to train.')
-    parser.add_argument('--learning_rate', metavar='R', type=float, default=0.001,
-                       help='learning rate for gradient descent algorithm')
+    parser.add_argument('--batch', metavar='N', type=int, default=300,
+                        help='size of each mini-batch')
+    parser.add_argument('--bptt', metavar='N', type=int,
+                        help='backpropagation through time; no. of timesteps')
+    parser.add_argument('--epochs', metavar='N', type=int, default=0,
+                        help='No. of epochs to train.')
+    parser.add_argument('--learning', metavar='R', type=float, default=0.001,
+                        help='learning rate for gradient descent algorithm')
     parser.add_argument('--random_seed', metavar='N', type=int, default=123,
-                       help='Seed random number generator with this, for repeatable results.')
+                        help='Seed random number generator with this, for repeatable results.')
 
     parser.add_argument('--output', metavar='<path/prefix>',
-                       help='output params and figures to <path/prefix>{params,features,mosaic}.dat.')
+                        help='output params and figures to <path/prefix>{params,features,mosaic}.dat.')
+    parser.add_argument('--loss', action='store_true',
+                        help='Print r.m.s. loss on validation data.')
     parser.add_argument('--dump', metavar='{hidden|recode|<custom method>}',
-                       help='dump computed hidden or recoded values to disk. Needs --output to be specified also.')
+                        help='dump computed hidden or recoded values to disk. Needs --output to be specified also.')
     parser.add_argument('--features', action='store_true',
                         help='Print image visualization of weights to disk.')
+
     parser.add_argument('--quiet', action='store_true', help='do not check and print validation accuracy')
 
     args = parser.parse_args()
@@ -99,6 +105,7 @@ if __name__ == '__main__':
         key, value = option.split('=')
         if ',' in value: kwargs[key] = [int(v) for v in value.split(',')]
         else: kwargs[key] = int(value)
+    if args.bptt: kwargs['seq_length'] = args.bptt
 
     np.random.seed(args.random_seed)
     coder_class = getattr(module, args.model)
@@ -130,16 +137,17 @@ if __name__ == '__main__':
     sess.run(tf.global_variables_initializer())    
     with sess.as_default():
         kwargs = dict(training_epochs=args.epochs, batch_size=args.batch,
-                      learning_rate=args.learning_rate, verbose=verbose, costing=cost_fn)
+                      learning_rate=args.learning, verbose=verbose, costing=cost_fn)
         if args.epochs:
             if args.labels:
                 train.label_train(sess, coder, dataset[:train_idx], dataset[train_idx:],
                                   labels[:train_idx], labels[train_idx:], **kwargs)
             elif args.targets:
                 train.target_train(sess, coder, dataset[:train_idx], dataset[train_idx:],
-                                  targets[:train_idx], targets[train_idx:], **kwargs)
+                                   targets[:train_idx], targets[train_idx:], **kwargs)
             else:
-                train.train(sess, coder, dataset[:train_idx], dataset[train_idx:], **kwargs)
+                train.train(sess, coder, dataset[:train_idx], dataset[train_idx:],
+                            bptt=args.bptt, **kwargs)
         
         if args.output is not None:
             if args.epochs or not args.fromfile:
@@ -152,18 +160,23 @@ if __name__ == '__main__':
                                   kind=args.dump, batch_size=args.batch,)
 
         if args.loss:
-            if args.labels:
-                cost, loss = train.get_label_costs(coder, dataset[train_idx:], labels[train_idx:],
-                                                   batch_size=args.batch)
-            elif args.targets:
-                cost = train.get_target_costs(coder, dataset[train_idx:], targets[train_idx:],
-                                              batch_size=args.batch, costing=cost_fn)
-                loss = cost
-            else:
-                cost, loss = train.get_costs(coder, dataset[train_idx:],
-                                             batch_size=args.batch, costing=cost_fn)
+            for count, sli in enumerate([slice(train_idx, None),
+                                         slice(0, len(dataset)-train_idx)]):
+                if args.labels:
+                    cost, loss = \
+                          train.get_label_costs(coder, dataset[sli], labels[sli],
+                                                batch_size=args.batch)
+                elif args.targets:
+                    cost, loss = \
+                         train.get_target_costs(coder, dataset[sli], targets[sli],
+                                                batch_size=args.batch, costing=cost_fn)
+                else:
+                    cost, loss = \
+                          train.get_costs(coder, dataset[sli], bptt=args.bptt,
+                                          batch_size=args.batch, costing=cost_fn)
 
-            print "Cost, loss on validation samples: %6.3f %.4f" % (cost, loss)
+                print "Cost, loss on %s samples: %.4f %.4f" % \
+                      ('subset train' if count else 'validation', cost, loss)
                    
 
         if args.features and hasattr(coder, 'features'):
