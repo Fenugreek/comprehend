@@ -129,6 +129,10 @@ class Coder(object):
         return [getattr(self, 'batch_size', -1)] + [self.n_hidden]
 
 
+    def set_batch_size(self, batch_size):
+        self.batch_size = batch_size
+
+
     def save_params(self, tofile):
         """
         Save params to disk, compatible with fromfile option of constructor.
@@ -162,8 +166,8 @@ class Coder(object):
         return batch_size
 
         
-    def dump_output(self, data, filename, kind='hidden',
-                    batch_size=None, dtype=None, **kwargs):
+    def dump_output(self, data, filename, kind='hidden', batch_size=None,
+                    dtype=None, post_process=None, **kwargs):
         """
         Compute hidden/recode values for given input data, according to current
         weights of the network, and then write to disk.
@@ -189,13 +193,17 @@ class Coder(object):
         if method is None:
             raise ValueError('Do not understand kind option: ' + kind)
 
-        save_file = open(filename, 'wb')
         batch_size = self._get_set_batch_size(batch_size) or len(data)
-                
+        shape = [batch_size] + list(self.input_shape()[1:])
+        batch = tf.placeholder(self.dtype, name='batch', shape=shape)
+        output = method(batch, **kwargs)
+        
+        save_file = open(filename, 'wb')
         for i in range(0, len(data) - batch_size + 1, batch_size):
-            values = method(data[i:i+batch_size], **kwargs).eval()
-            if dtype is not None: values = values.astype(dtype, copy=False)
-            cPickle.dump(values, save_file, -1)
+            values = output.eval(feed_dict={batch: data[i:i+batch_size]})
+            if post_process: values = post_process(values)
+            cPickle.dump(values if dtype is None else
+                         values.astype(dtype, copy=False), save_file, -1)
                        
         save_file.close()    
         
@@ -471,10 +479,6 @@ class Conv(Coder):
                                           name='bhid', trainable=trainable)
         self.params['bvis'] = tf.Variable(tf.zeros(i_shape, dtype=self.dtype),
                                           name='bvis', trainable=trainable)
-
-
-    def set_batch_size(self, batch_size):
-        self.batch_size = batch_size
         
 
     def get_hidden_values(self, inputs, **kwargs):
@@ -682,7 +686,7 @@ class ConvMax1D(ConvMaxSquare):
             overlay[args + np.arange(len(args)) * s[2]] = True
             overlay = overlay.reshape([s[0], s[1], s[3], s[2]])
             overlay = np.rollaxis(overlay, -1, 2)
-            return tamarind.arrays.extend(overlay, s[4])
+            return arrays.extend(overlay, s[4])
         else:
             args = np.random.randint(s[2], size=np.prod(s) / s[2])
             overlay = np.zeros(np.prod(s), np.bool)
@@ -691,14 +695,15 @@ class ConvMax1D(ConvMaxSquare):
             return np.rollaxis(overlay, -1, 2)            
         
     
-    def get_reconstructed_input(self, hidden, reduced=False,
-                                overlay=None, static_hidden=False, scale=True):
+    def get_reconstructed_input(self, hidden, reduced=False, overlay=None,
+                                static_hidden=False, scale=True, **kwargs):
         """
         overlay mask holds positions of max indices (when max pooling was done).
         If None, use previous state where possible.
         If None, and no previous state, assign random positions.
         If scalar, set max indices to this.
-        If list, put in multiple positions.
+        If list, put in multiple positions (optionally divide by pool_width if <scale>).
+
         Same random position is assigned to every hidden
         """        
 
