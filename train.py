@@ -15,8 +15,9 @@ from numpy.random import randint
 
 import tensorflow as tf
 import functions
-from tamarind import arrays
+from tamarind import arrays, logging
 
+logger = logging.Logger(__file__.split('/')[-1], 'warning')
 
 def corrupt(dataset, corruption):
     """
@@ -46,7 +47,8 @@ def get_costs(coder, dataset, batch_size=100, costing=functions.cross_entropy,
     batch = tf.placeholder(coder.dtype, name='batch', shape=shape)
 
     coder.reset_state()
-    output = coder.recode(batch, store=bptt)
+    kwargs = {'store': bptt} if bptt is not None else {}
+    output = coder.recode(batch, **kwargs)
 
     if costing != tf.squared_difference:
         inputs = tf.placeholder(coder.dtype, name='inputs', shape=shape)
@@ -141,7 +143,7 @@ def get_target_costs(coder, dataset, targets, batch_size=100, costing=tf.squared
     return (sum_cost / n_batches, sum_loss / n_batches)
 
 
-def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1)):
+def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1), logger=logger):
     """Return opertation that trains parameters, given cost tensor."""
 
     opt = tf.train.AdamOptimizer(learning_rate)
@@ -150,14 +152,15 @@ def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1)):
     grads_vars = []
     for grad_var in opt.compute_gradients(cost):
         if grad_var[0] is None:
-#            print 'Warning: no gradient for variable %s' % grad_var[1].name
+            if logger is not None:
+                logger.info('No gradient for variable {}', grad_var[1].name)
             continue
         grads_vars.append((tf.clip_by_value(grad_var[0], -1., 1.), grad_var[1]))
 
     return opt.apply_gradients(grads_vars)
 
 
-def train(sess, coder, dataset, validation_set, verbose=False,
+def train(sess, coder, dataset, validation_set, logger=logger,
           training_epochs=10, learning_rate=0.001, batch_size=100,
           costing=functions.cross_entropy, bptt=None, skips=None):
     """
@@ -180,16 +183,14 @@ def train(sess, coder, dataset, validation_set, verbose=False,
     train_step = get_trainer(cost, learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
-    if verbose:
-        print('Initial cost %.4f r.m.s. loss %.4f' %
-              get_costs(coder, validation_set, batch_size, costing, bptt=bptt))
+    logger.info('Initial cost {:.4f} r.m.s. loss {:.4f}',
+                *get_costs(coder, validation_set, batch_size, costing, bptt=bptt))
     
     n_train_batches = dataset.shape[0] // batch_size
     if bptt: n_batch_seqs = dataset.shape[2] // bptt
     for epoch in range(training_epochs):
 
         for index in range(n_train_batches):
-#            print(index)
             batch = dataset[index * batch_size : (index+1) * batch_size]
             if bptt:
                 for seq in range(n_batch_seqs):
@@ -199,14 +200,13 @@ def train(sess, coder, dataset, validation_set, verbose=False,
             else:
                 train_step.run(feed_dict=coder.train_feed(batch))
                 
-        if verbose:
-            print('Training epoch %d cost %.4f r.m.s. loss %.4f ' %
-                  ((epoch,) + get_costs(coder, validation_set, batch_size, costing, bptt=bptt)))
+        logger.info('Training epoch ' +str(epoch)+ ' cost {:.4f} r.m.s. loss {:.4f}',
+                    *get_costs(coder, validation_set, batch_size, costing, bptt=bptt))
 
 
 def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
-                verbose=False, training_epochs=10, learning_rate=0.001,
-                batch_size=100, costing='dummy'):
+                logger=logger, training_epochs=10, learning_rate=0.001,
+                batch_size=100, **kwargs):
     """
     Train a networks object on given data for classification.
 
@@ -224,9 +224,8 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
                              learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
-    if verbose:
-        print('Initial cost %5.2f error rate %.3f ' %
-              get_label_costs(coder, valid_set, valid_labels, batch_size))
+    logger.info('Initial cost {:5.2f} error rate {:.3f} ',
+                *get_label_costs(coder, valid_set, valid_labels, batch_size))
 
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
@@ -238,15 +237,13 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
                                                 (index+1) * batch_size]
             train_step.run(feed_dict=train_feed)
 
-        if verbose:
-            print('Training epoch %d cost %5.2f error rate %.3f ' %
-                  ((epoch,) + get_label_costs(coder, valid_set, valid_labels,
-                                              batch_size)))
+        logger.info('Training epoch ' +str(epoch)+ ' cost {:5.2f} error rate {:.3f}',
+                    *get_label_costs(coder, valid_set, valid_labels, batch_size))
 
 
 def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
-                 verbose=False, training_epochs=10, learning_rate=0.001,
-                 batch_size=100, costing=tf.squared_difference):
+                 logger=logger, training_epochs=10, learning_rate=0.001,
+                 batch_size=100, costing=tf.squared_difference, **kwargs):
     """
     Train a networks object on given data for matching hidden values with targets.
 
@@ -265,9 +262,8 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
                              learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
-    if verbose:
-        print('Initial cost %.4f r.m.s. loss %.4f' %
-              get_target_costs(coder, valid_set, valid_targets, batch_size, costing))
+    logger.info('Initial cost {:.4f} r.m.s. loss {:.4f}',
+                *get_target_costs(coder, valid_set, valid_targets, batch_size, costing))
 
     n_train_batches = dataset.shape[0] // batch_size
     for epoch in range(training_epochs):
@@ -279,10 +275,8 @@ def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
                                                 (index+1) * batch_size]
             train_step.run(feed_dict=train_feed)
 
-        if verbose:
-            print('Training epoch %d cost %.4f r.m.s. loss %.4f ' %
-                  ((epoch,) + get_target_costs(coder, valid_set, valid_targets,
-                                               batch_size, costing)))
+        logger.info('Training epoch ' +str(epoch)+ ' cost {:.4f} r.m.s. loss {:.4f}',
+                    *get_target_costs(coder, valid_set, valid_targets, batch_size, costing))
 
 
 def rnn_extend(sess, coder, inputs, skips=None, length=1):

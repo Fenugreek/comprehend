@@ -11,6 +11,8 @@ import bloscpack as bp
 import tensorflow as tf
 from comprehend import train, features, functions, layers
 
+from tamarind import logging
+
 # Specify some functions here that are hard to do on the command line.
 # ====================================================================
 
@@ -47,8 +49,8 @@ if __name__ == '__main__':
     parser.add_argument('--options', metavar='<option>=<integer>[,<integer>...]', nargs='+',
                         help='options to pass to constructor of network architecture; only integers supported for now.')
 
-    parser.add_argument('--data', metavar='<filename.blp>',
-                        help='data file to use for training.')
+    parser.add_argument('--data', metavar='<filename.blp>', nargs='+',
+                        help='data file(s) to use for training. If multiple, they are joined.')
     parser.add_argument('--labels', metavar='<filename.blp>',
                         help='data file with labels for classification training.')
     parser.add_argument('--targets', metavar='<filename.blp>',
@@ -77,9 +79,15 @@ if __name__ == '__main__':
     parser.add_argument('--features', action='store_true',
                         help='Print image visualization of weights to disk.')
 
-    parser.add_argument('--quiet', action='store_true', help='do not check and print validation accuracy')
-
+    parser.add_argument('--log', metavar='log_level', default='info',
+                        help='debug, info, warning, error or critical.')
     args = parser.parse_args()
+
+    logfile = open(args.output+'log.txt', 'w') if args.output else None
+    logger = logging.Logger(__file__.split('/')[-1], args.log,
+                            logfile=logfile, printer=sys.stdout)
+    verbose = logger.level_value < 30 # INFO or more verbose
+
     if not args.model:
         args.model = 'Layers'
         args.module = 'comprehend.layers'
@@ -88,17 +96,17 @@ if __name__ == '__main__':
     verbose = not args.quiet
 
     # load data
-    dataset = bp.unpack_ndarray_file(args.data)
-    if args.labels: labels = bp.unpack_ndarray_file(args.labels)
-    if args.targets: targets = bp.unpack_ndarray_file(args.targets)
+    dataset = np.hstack(bp.unpack_ndarray_file(fname) for fname in args.data)
     if data_fn: dataset = data_fn(dataset)
-    if target_fn: targets = data_fn(targets)
+    if args.labels: labels = bp.unpack_ndarray_file(args.labels)
+    if args.targets:
+        targets = bp.unpack_ndarray_file(args.targets)
+        if target_fn: targets = target_fn(targets)
     
     # partition to training and validation
     train_idx = int((1.0 - args.validation) * len(dataset))
-    if verbose:
-        print "Train samples %d, validation samples %d" % (train_idx,
-                                                           len(dataset) - train_idx)
+    logger.info('Train samples {}, validation samples {}',
+                train_idx, len(dataset) - train_idx)
 
     kwargs = {}
     for option in args.options or []:
@@ -110,34 +118,35 @@ if __name__ == '__main__':
     np.random.seed(args.random_seed)
     coder_class = getattr(module, args.model)
     if args.fromfile:
-        coder = coder_class(verbose=verbose, fromfile=args.fromfile, batch_size=args.batch,
+        coder = coder_class(fromfile=args.fromfile, batch_size=args.batch, verbose=verbose,
                             coding=coding_fn, decoding=decoding_fn, **kwargs)
     else:
         coder = coder_class(n_hidden=args.hidden, n_visible=args.visible or dataset.shape[1],
                             verbose=verbose, batch_size=args.batch,
                             coding=coding_fn, decoding=decoding_fn, **kwargs)
     if args.add:
-        coder_class = getattr(networks, args.add, None) or getattr(compound, args.add)
+        if '.' not in args.add: args.add = 'networks.' + args.add
+        module = args.add[:args.add.rfind('.')]
+        if '.' not in module: module = 'comprehend.' + module
+        module = importlib.import_module(module)
+        coder_class = getattr(module, args.add.split('.')[-1], None)
         coder2 = coder_class(n_hidden=args.hidden, n_visible=args.visible or dataset.shape[1],
                              verbose=verbose, batch_size=args.batch,
                              coding=coding_fn, decoding=decoding_fn, **kwargs)
-        coder = compound.add_layer(coder, coder2)                                  
+        coder = layers.add_layer(coder, coder2)
     if aux_fn: aux_fn(coder)
 
     if args.labels or args.targets:
         n_out = np.max(labels) + 1 if args.labels else targets.shape[-1]
         if coder.n_hidden != n_out:
-            print "Adding %d output layer to match target" % n_out
+            logger.warning("Adding {} output layer to match target", n_out)
             coder = layers.add_class_layer(coder, n_out)
-
-    if dataset.shape[1:] != coder.input_shape()[1:]:
-        dataset = dataset.reshape([-1] + list(coder.input_shape()[1:]))
 
     sess = tf.Session(config=tf.ConfigProto(log_device_placement=False))
     sess.run(tf.global_variables_initializer())    
     with sess.as_default():
         kwargs = dict(training_epochs=args.epochs, batch_size=args.batch,
-                      learning_rate=args.learning, verbose=verbose, costing=cost_fn)
+                      learning_rate=args.learning, logger=logger, costing=cost_fn)
         if args.epochs:
             if args.labels:
                 train.label_train(sess, coder, dataset[:train_idx], dataset[train_idx:],
@@ -190,7 +199,7 @@ if __name__ == '__main__':
                 pyplot.imsave(args.output+'features.png', results, origin='upper')
 
             if hasattr(coder, 'stimuli'):
-                results = coder.stimuli(-1)
+                results = coder.all_stimuli(-1)
                 if args.output is None:
                     pyplot.imshow(results, interpolation='nearest')
                     pyplot.show()
@@ -198,3 +207,4 @@ if __name__ == '__main__':
                     pyplot.imsave(args.output+'stimuli.png', results, origin='upper')
                 
     sess.close()
+    if logfile is not None: logfile.close()
