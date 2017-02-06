@@ -138,8 +138,8 @@ class Layers(networks.Conv):
         return values
 
 
-    def features(self, layer=0, *args):
-        return self.coders[layer].features(*args)
+    def features(self, *args, **kwargs):
+        return self.coders[kwargs.get('layer', 0)].features(*args, **kwargs)
     
 
     def recoded_features(self, inputs, layer=-1, inverse_fn=ielu):
@@ -217,7 +217,8 @@ def add_layer(existing, additional):
         existing.push(additional)
         return existing
     else:
-        return Layers([existing, additional])
+        return Layers([existing, additional],
+                      batch_size=existing.batch_size)
 
 
 def add_class_layer(coder, n_classes, coding=tf.nn.elu):
