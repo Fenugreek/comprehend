@@ -213,9 +213,10 @@ class Coder(object):
         return [dataset]
 
 
-    def train_feed(self, data):
+    def train_feed(self, *data):
         """Return feed_dict based on data to be used for training."""
-        return {self.train_args[0]: data}
+        return dict((t, d) for t, d in zip(self.train_args, data))
+#{self.train_args[0]: data}
 
 
     def get_hidden_values(self, inputs, **kwargs):
@@ -246,22 +247,23 @@ class Coder(object):
         return tf.reduce_mean(loss)
 
 
-    def label_cost(self, inputs, labels):
+    def label_cost(self, inputs, labels, **kwargs):
         """
         For classification problems, mean cross entropy between class probabilities.
         i.e. Cost for given input batch of samples, under current params.
         """
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            self.get_hidden_values(inputs), labels)
+        hidden = self.get_hidden_values(inputs, **kwargs)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(hidden, labels)
         return tf.reduce_mean(loss)
 
 
-    def target_cost(self, inputs, targets, function=tf.squared_difference):
+    def target_cost(self, inputs, targets, function=tf.squared_difference, **kwargs):
         """
         For mapping problems, r.m.s. difference between hidden values and targets.
         i.e. Cost for given input batch of samples, under current params.
         """
-        return tf.reduce_mean(function(self.get_hidden_values(inputs), targets))
+        hidden = self.get_hidden_values(inputs, **kwargs)
+        return tf.reduce_mean(function(hidden, targets))
 
 
     def rms_loss(self, inputs, **kwargs):
@@ -965,6 +967,11 @@ class RRBM(RBM):
             self.beta_sampling = beta_sampling
         if self.sigma is None: raise AssertionError('Need to supply sigma param.')
 
+        self.hidden = tf.placeholder(self.dtype, name='hidden',
+                                     shape=[self.batch_size, self.n_hidden])
+        self.mean_v = tf.sigmoid(tf.matmul(self.hidden, self.params['W'],
+                                           transpose_b=True) +
+                                 self.params['bvis'])
 
     def free_energy(self, v):
         return RBM.free_energy(self, v) + \
@@ -973,8 +980,7 @@ class RRBM(RBM):
 
     def sample_v_given_h(self, h, eps=1e-5):
         
-        mean_v = sigmoid(np.dot(h, self.params['W'].eval().T) +
-                         self.params['bvis'].eval())
+        mean_v = self.mean_v.eval(feed_dict={self.hidden: h})
 
         if not self.beta_sampling:
             rnds = np.random.randn(mean_v.shape[0], mean_v.shape[1]).astype(h.dtype)
@@ -983,7 +989,7 @@ class RRBM(RBM):
         mvvm = mean_v * (1 - mean_v)
         var_v = np.fmin(mvvm, self.sigma**2)
         operand = (mvvm + 1.5 * eps) / (var_v + eps) - 1
-        alpha = mean_v * operand
+        alpha = mean_v * operand + eps
         beta = (1 - mean_v) * operand + eps
 
         return np.random.beta(alpha, beta).astype(h.dtype)
@@ -994,10 +1000,18 @@ class R3BM(RRBM):
     Real-valued RBM with real-valued hidden units too.
     """
     
+    def __init__(self, **kwargs):
+        RRBM.__init__(self, **kwargs)
+
+        self.visible = tf.placeholder(self.dtype, name='visible',
+                                      shape=[self.batch_size, self.n_visible])
+        self.mean_h = tf.sigmoid(tf.matmul(self.visible, self.params['W']) +
+                                 self.params['bhid'])
+
+
     def sample_h_given_v(self, v, eps=1e-5):
         
-        mean_h = sigmoid(np.dot(v, self.params['W'].eval()) +
-                         self.params['bhid'].eval())
+        mean_h = self.mean_h.eval(feed_dict={self.visible: v})
 
         if not self.beta_sampling:
             rnds = np.random.randn(mean_h.shape[0], mean_h.shape[1]).astype(v.dtype)
@@ -1006,7 +1020,7 @@ class R3BM(RRBM):
         mhhm = mean_h * (1 - mean_h)
         var_h = np.fmin(mhhm, self.sigma**2)
         operand = (mhhm + 1.5 * eps) / (var_h + eps) - 1
-        alpha = mean_h * operand
+        alpha = mean_h * operand + eps
         beta = (1 - mean_h) * operand + eps
 
         return np.random.beta(alpha, beta).astype(v.dtype)
