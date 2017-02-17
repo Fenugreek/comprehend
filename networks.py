@@ -106,7 +106,7 @@ class Coder(object):
             else:
                 self.init_params(**kwargs)
             
-        self.init_train_args(**kwargs)
+        self.input_dims = 2
         if not hasattr(self, 'output_dims'):
             self.output_dims = self.input_dims
         
@@ -114,12 +114,15 @@ class Coder(object):
     def init_params(self, **kwargs):
         pass
 
-    def init_train_args(self, **kwargs):
+    def init_train_args(self, train='recode', **kwargs):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible])]
-        self.input_dims = 2
-
+        if train == 'target':
+            self.train_args.append(tf.placeholder(self.dtype,
+                                                  shape=[None, self.n_hidden]))
+        return self.train_args
+    
     
     def input_shape(self):
         return [getattr(self, 'batch_size', -1)] + [self.n_visible]
@@ -216,7 +219,6 @@ class Coder(object):
     def train_feed(self, *data):
         """Return feed_dict based on data to be used for training."""
         return dict((t, d) for t, d in zip(self.train_args, data))
-#{self.train_args[0]: data}
 
 
     def get_hidden_values(self, inputs, **kwargs):
@@ -364,10 +366,18 @@ class Denoising(Auto):
 
         self.corruption = corruption
 
+
+    def init_train_args(self, train='recode', **kwargs):
         # Train args has an additional element:
         #   the corrupted version of the input.
-        self.train_args.append(tf.placeholder(self.dtype,
-                                              shape=[None, self.n_visible]))
+        self.train_args = [tf.placeholder(self.dtype,
+                                          shape=[None, self.n_visible]),
+                           tf.placeholder(self.dtype,
+                                          shape=[None, self.n_visible])]
+        if train == 'target':
+            self.train_args.append(tf.placeholder(self.dtype,
+                                                  shape=[None, self.n_hidden]))
+        return self.train_args
         
 
     def cost(self, inputs, corrupts, **kwargs):
@@ -434,6 +444,7 @@ class Conv(Coder):
             self.padding = padding
 
         Coder.__init__(self, coding=coding, **kwargs)
+        self.input_dims = 4
 
         # add default no. of channels, if unspecified
         if len(self.shapes[0]) == 2: self.shapes[0].append(1)
@@ -458,11 +469,16 @@ class Conv(Coder):
         return [self.batch_size] + dims + [self.n_hidden]
 
 
-    def init_train_args(self, **kwargs):
+    def init_train_args(self, train='recode', **kwargs):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None] + self.shapes[0])]
-        self.input_dims = 4
+        if train == 'target':
+            h_shape = self.output_shape(**kwargs)
+            self.train_args.append(tf.placeholder(self.dtype,
+                                                  shape=[None] + h_shape[1:]))
+        
+        return self.train_args
 
 
     def init_params(self, trainable=True, **kwargs):
@@ -753,13 +769,13 @@ class RBM(Auto):
         self.chain_end = None
         
 
-    def init_train_args(self, **kwargs):
+    def init_train_args(self, train='recode', **kwargs):
         self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible]),
                            tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible])]
-        self.input_dims = 2
-
+        return self.train_args
+    
 
     def free_energy(self, v):
         """Approx free energy of system given visible unit values."""
@@ -1047,7 +1063,7 @@ class ERBM(RBM):
              tf.placeholder(self.dtype, shape=[None, self.n_hidden]),
              tf.placeholder(self.dtype, shape=[None, self.n_visible]),
              tf.placeholder(self.dtype, shape=[None, self.n_hidden])]
-        self.input_dims = 2
+        return self.train_args
 
 
     def cost(self, v, h, chain_v, chain_h):
@@ -1120,6 +1136,7 @@ class RNN(Coder):
         if not kwargs.get('fromfile'):
             self.n_output = n_output or kwargs['n_visible']
         Coder.__init__(self, coding=coding, **kwargs)
+        self.input_dims = 3
         self.state = {}
 
 
@@ -1144,8 +1161,8 @@ class RNN(Coder):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(self.dtype, name='train',
                                           shape=[None, self.n_visible, self.seq_length])]
-        self.input_dims = 3
-
+        return self.train_args
+    
 
     def input_shape(self):
         return [getattr(self, 'batch_size', -1)] + [self.n_visible, self.seq_length]
@@ -1439,9 +1456,13 @@ class VAE(Coder):
         self.n_z = n_z
         Coder.__init__(self, **kwargs)
 
+
+    def init_train_args(self, train='recode', **kwargs):
         # Train args has an additional element: sampling from latent space
+        Coder.init_train_args(self, train=train, **kwargs)
         self.train_args.append(tf.placeholder(float_dt,
                                               shape=[None, self.n_z]))
+        return self.train_args
 
 
     def init_params(self, constant=1, trainable=True, **kwargs):

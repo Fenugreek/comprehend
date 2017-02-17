@@ -111,36 +111,19 @@ def get_label_costs(coder, dataset, labels, batch_size=100):
     return (cost / n_batches, error / n_batches)
 
 
-def get_target_costs(coder, dataset, targets, batch_size=100, costing=tf.squared_difference):
+def get_mean_cost(cost, tf_args, datas, batch_size=100):
     """
-    Return average r.m.s. error between target and hidden values on 
-    dataset by coder object with its current weights.
+    Return average cost across data.
     """
-
-    batch = tf.placeholder(coder.dtype, [batch_size] + list(dataset.shape[1:]))
-    predicted = coder.get_hidden_values(batch)
-    if costing != tf.squared_difference:
-        shape = [batch_size] + list(targets.shape[1:])
-        batch_h = tf.placeholder(coder.dtype, name='batch_h', shape=shape)
-        batch_t = tf.placeholder(coder.dtype, name='batch_t', shape=shape)
-        cost = tf.reduce_mean(costing(batch_h, batch_t))
     
-    n_batches = dataset.shape[0] // batch_size
+    n_batches = datas[0].shape[0] // batch_size
     sum_cost = 0.
-    sum_loss = 0
     for index in range(n_batches):
-        hidden = predicted.eval(feed_dict={batch: dataset[index * batch_size :
-                                                          (index+1) * batch_size]})
-        actual = targets[index * batch_size : (index+1) * batch_size]
-        sum_loss += np.mean(np.mean(arrays.plane((actual - hidden)**2),
-                                    axis=1)**.5)
+        sliced = slice(index * batch_size, (index+1) * batch_size)        
+        sum_cost += cost.eval(feed_dict=dict((t, d[sliced])
+                                             for t, d in zip(tf_args, datas)))
         
-        if costing != tf.squared_difference:
-            costed = cost.eval(feed_dict={batch_h: hidden, batch_t: actual})
-            sum_cost += np.mean(costed)
-
-    if costing == tf.squared_difference: sum_cost = sum_loss    
-    return (sum_cost / n_batches, sum_loss / n_batches)
+    return sum_cost / n_batches
 
 
 def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1), logger=logger):
@@ -160,7 +143,7 @@ def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1), logger=logger):
     return opt.apply_gradients(grads_vars)
 
 
-def train(sess, coder, dataset, validation_set, logger=logger,
+def train(sess, coder, dataset, train_idx, logger=logger,
           training_epochs=10, learning_rate=0.001, batch_size=100,
           costing=functions.cross_entropy, bptt=None, skips=None):
     """
@@ -172,21 +155,20 @@ def train(sess, coder, dataset, validation_set, logger=logger,
 
     dataset: dataset for training.
 
-    validation_set: dataset for monitoring.
+    train_idx: split dataset into training and validation across this index.
     """
 
-    kwargs = {'function': costing, 'skips': skips}
+    kwargs = {'skips': skips}
     if bptt: kwargs['store'] = True
-    cost = coder.cost(*coder.train_args, **kwargs)
-    opt = tf.train.AdamOptimizer(learning_rate)
+    cost = coder.cost(*coder.train_args, function=costing, **kwargs)
     
     train_step = get_trainer(cost, learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
     logger.info('Initial cost {:.4f} r.m.s. loss {:.4f}',
-                *get_costs(coder, validation_set, batch_size, costing, bptt=bptt))
+                *get_costs(coder, dataset[train_idx:], batch_size, costing, bptt=bptt))
     
-    n_train_batches = dataset.shape[0] // batch_size
+    n_train_batches = train_idx // batch_size
     if bptt: n_batch_seqs = dataset.shape[2] // bptt
     for epoch in range(training_epochs):
 
@@ -201,22 +183,18 @@ def train(sess, coder, dataset, validation_set, logger=logger,
                 train_step.run(feed_dict=coder.train_feed(batch))
                 
         logger.info('Training epoch ' +str(epoch)+ ' cost {:.4f} r.m.s. loss {:.4f}',
-                    *get_costs(coder, validation_set, batch_size, costing, bptt=bptt))
+                    *get_costs(coder, dataset[train_idx:], batch_size, costing, bptt=bptt))
 
 
-def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
+def label_train(sess, coder, dataset, labels, train_idx,
                 logger=logger, training_epochs=10, learning_rate=0.001,
                 batch_size=100, **kwargs):
     """
     Train a networks object on given data for classification.
 
-    sess: TensorFlow session.
-
     coder: networks object that supports label_cost() method.
 
     dataset, labels: dataset for training, with associated labels.
-
-    valid_set, valid_labels: dataset for monitoring, with associated labels.
     """
 
     train_args = coder.train_args + [tf.placeholder(tf.int32, shape=[None])]
@@ -225,9 +203,9 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
     sess.run(tf.global_variables_initializer())    
 
     logger.info('Initial cost {:5.2f} error rate {:.3f} ',
-                *get_label_costs(coder, valid_set, valid_labels, batch_size))
+                *get_label_costs(coder, dataset[train_idx:], labels[train_idx:], batch_size))
 
-    n_train_batches = dataset.shape[0] // batch_size
+    n_train_batches = train_idx // batch_size
     for epoch in range(training_epochs):
 
         for index in range(n_train_batches):
@@ -238,45 +216,45 @@ def label_train(sess, coder, dataset, valid_set, labels, valid_labels,
             train_step.run(feed_dict=train_feed)
 
         logger.info('Training epoch ' +str(epoch)+ ' cost {:5.2f} error rate {:.3f}',
-                    *get_label_costs(coder, valid_set, valid_labels, batch_size))
+                    *get_label_costs(coder, dataset[train_idx:], labels[train_idx:], batch_size))
 
 
-def target_train(sess, coder, dataset, valid_set, targets, valid_targets,
+def target_train(sess, coder, datas, train_idx, shuffle=True,
                  logger=logger, training_epochs=10, learning_rate=0.001,
                  batch_size=100, costing=tf.squared_difference, **kwargs):
     """
-    Train a networks object on given data for matching hidden values with targets.
+    Train a networks object <coder> on given list of datasets <datas>
+    for matching hidden values with targets.
 
-    sess: TensorFlow session.
+    train_idx:
+    Split datasets across this index into training and validation sets.
 
-    coder: networks object that supports get_hidden_values() method.
-
-    dataset, targets: dataset for training, with associated targets.
-
-    valid_set, valid_targets: dataset for monitoring, with associated targets.
+    shuffle:
+    Shuffle training data after each epoch.
     """
 
-    train_args = coder.train_args + [tf.placeholder(coder.dtype,
-                                                    shape=[None, coder.n_hidden])]
-    train_step = get_trainer(coder.target_cost(*train_args, function=costing),
-                             learning_rate=learning_rate)
+    train_args = coder.init_train_args(train='target')
+    cost = coder.target_cost(*train_args, function=costing)
+    train_step = get_trainer(cost, learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
 
-    logger.info('Initial cost {:.4f} r.m.s. loss {:.4f}',
-                *get_target_costs(coder, valid_set, valid_targets, batch_size, costing))
+    logger.info('Initial cost {:.4f}',
+                get_mean_cost(cost, train_args,
+                              [d[train_idx:] for d in datas], batch_size))
 
-    n_train_batches = dataset.shape[0] // batch_size
+    n_train_batches = train_idx // batch_size
     for epoch in range(training_epochs):
-
+        if shuffle:
+            perm = np.random.permutation(train_idx)
+            for data in datas: data[:train_idx] = data[perm]
         for index in range(n_train_batches):
-            train_feed = coder.train_feed(dataset[index * batch_size :
-                                                  (index+1) * batch_size])
-            train_feed[train_args[-1]] = targets[index * batch_size :
-                                                (index+1) * batch_size]
-            train_step.run(feed_dict=train_feed)
+            sliced = slice(index * batch_size, (index+1) * batch_size)        
+            train_step.run(feed_dict=dict((t, d[sliced])
+                                          for t, d in zip(train_args, datas)))
 
-        logger.info('Training epoch ' +str(epoch)+ ' cost {:.4f} r.m.s. loss {:.4f}',
-                    *get_target_costs(coder, valid_set, valid_targets, batch_size, costing))
+        logger.info('Training epoch ' +str(epoch)+ ' cost {:.4f}',
+                    get_mean_cost(cost, train_args,
+                                  [d[train_idx:] for d in datas], batch_size))
 
 
 def rnn_extend(sess, coder, inputs, skips=None, length=1):

@@ -33,7 +33,6 @@ class Layers(networks.Conv):
             if not is_handle: save_file.close()
 
         self.verbose = verbose
-        self.train_args = self.coders[0].train_args
         self.input_dims = self.coders[0].input_dims
         self.output_dims = self.coders[-1].output_dims
         self.n_visible = self.coders[0].n_visible
@@ -43,6 +42,14 @@ class Layers(networks.Conv):
         if batch_size is not None:
             self.set_batch_size(batch_size)
             self.batch_size = batch_size            
+
+
+    def init_train_args(self, train='recode', **kwargs):
+        self.train_args = self.coders[0].init_train_args(train='recode', **kwargs)
+        if train == 'target':
+            self.train_args.append(tf.placeholder(self.dtype,
+                                                  shape=[None, self.n_hidden]))
+        return self.train_args
         
 
     def pop(self):
