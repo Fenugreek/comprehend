@@ -10,7 +10,7 @@ import bloscpack as bp
 
 import tensorflow as tf
 import tensorflow.examples.tutorials.mnist.input_data as mnist_data
-from comprehend import train, features, layers, functions
+from comprehend import train, features, layers, functions, mnist
 
 from tamarind import logging
 import tamarind.functions
@@ -223,7 +223,10 @@ if __name__ == '__main__':
         if args.features and hasattr(coder, 'features'):
             results = coder.features(dataset[train_idx:]).squeeze()
             results = results[features.corrsort(results, use_tsp=True)]
-            if results.ndim == 3: results = features.tile(results, scale=True)
+            if args.data is None: #mnist. Prepare to tile weights.
+                results = results.reshape((-1, 28, 28))
+            if results.ndim == 3:
+                results = features.tile(results, scale=True)
             if args.output is None:
                 pyplot.imshow(results, interpolation='nearest')
                 pyplot.show()
@@ -237,6 +240,12 @@ if __name__ == '__main__':
                     pyplot.show()
                 else:
                     pyplot.imsave(args.output+'stimuli.png', results, origin='upper')
+
+            if args.data is None: #mnist. Perform additional visualization.
+                results = mnist.test_coder(coder, dataset[train_idx:train_idx+100])
+                img = mnist.mosaic(results, show=args.output is None)
+                if args.output:
+                    pyplot.imsave(args.output+'mosaic.png', img, origin='upper')
 
     sess.close()
     if logfile is not None: logfile.close()
