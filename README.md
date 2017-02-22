@@ -1,15 +1,17 @@
-Unsupervised Learning with Artifical Neural Networks
+Learning with Artifical Neural Networks
 ===================
 
-Implementation of neural network architectures using the Google TensorFlow machine-learning library, primarily for unsupervised learning.
+Implementation of neural network architectures using the Google TensorFlow machine-learning library.
 
-Currently, autoencoders, denoising autoencoders, RBMs, and RNNs are implemented, along with their training on MNIST. 
+Autoencoders, denoising autoencoders, RBMs, Conv nets and RNNs are implemented, along with their training in both unsupervised and supervised contexts. 
 
 ### Notable modules:
 - **networks** : Implements the various NN architectures. 
 
+- **layers**: Implements multiple layers of architectures defined in **networks**.
+
 ### Test script:
-- **test.py** : Train the network specified on MNIST data, (optionally) saving params learnt to disk. (Optionally) display features learnt, and results of reconstruction on corrupted input.
+- **run.py** : Train the network specified on MNIST data, (optionally) saving params learnt to disk. (Optionally) display features learnt, and results of reconstruction on corrupted input.
 
 Installation
 ------------
@@ -64,21 +66,26 @@ optional arguments:
 Sample command-line and output:
 
 ```
-$ python test.py --model RBM --epochs 8 --learning_rate 0.05 --verbose --hidden 500 --batch 40 --mosaic
+$ python run.py --model RBM --epochs 8  --hidden 500 --batch 40 --features --output rbm_8_
 
-Initial cost 758.88, r.m.s. loss 0.565
-Resetting chain, with new no. of parallel chains: 40
-Training epoch 0, cost -18.81, r.m.s. loss 0.107 
-Training epoch 1, cost -7.77, r.m.s. loss 0.097 
-Training epoch 2, cost -8.31, r.m.s. loss 0.094 
-Training epoch 3, cost -5.25, r.m.s. loss 0.092 
-Training epoch 4, cost 0.59, r.m.s. loss 0.089 
-Training epoch 5, cost -0.40, r.m.s. loss 0.089 
-Training epoch 6, cost -2.03, r.m.s. loss 0.087 
-Training epoch 7, cost 2.29, r.m.s. loss 0.086 
+[INFO  run.py 11:22:02] Initial cost 0.7152 r.m.s. loss 0.4912
+[INFO  run.py 11:23:02] Training epoch 0 cost 0.1182 r.m.s. loss 0.1277
+[INFO  run.py 11:24:01] Training epoch 1 cost 0.1004 r.m.s. loss 0.1047
+[INFO  run.py 11:25:00] Training epoch 2 cost 0.0928 r.m.s. loss 0.0939
+[INFO  run.py 11:25:59] Training epoch 3 cost 0.0888 r.m.s. loss 0.0879
+[INFO  run.py 11:26:59] Training epoch 4 cost 0.0862 r.m.s. loss 0.0837
+[INFO  run.py 11:27:58] Training epoch 5 cost 0.0844 r.m.s. loss 0.0807
+[INFO  run.py 11:28:57] Training epoch 6 cost 0.0833 r.m.s. loss 0.0789
+[INFO  run.py 11:29:56] Training epoch 7 cost 0.0822 r.m.s. loss 0.0770
 ```
 
-This will also produce the following images as output:
+This will create a set of files beginning with the prefix `rbm_8_`.
+
+- `rbm_8_params.dat`:
+This file has the weights learned, and can be used to continue training where it was left off by using `--params rbm_8_params.dat` option when executing `run.py`.
+
+- `rbm_8_features.png, rbm_8_mosaic.png`:
+These are visualizations of the features learnt, and performance of the model on validation input. They look as follows:
 
 ![Visualization of features learnt](http://www.subburam.org/files/features.png "Heatmap of node weights")
 ![MNIST image reconstruction test output](http://www.subburam.org/files/mosaic.png "Input (top half) output (bottom half) test")
