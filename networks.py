@@ -769,7 +769,7 @@ class RBM(Auto):
         self.chain_end = None
         
 
-    def init_train_args(self, train='recode', **kwargs):
+    def init_train_args(self, **kwargs):
         self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible]),
                            tf.placeholder(self.dtype,

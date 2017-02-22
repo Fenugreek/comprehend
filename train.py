@@ -145,7 +145,7 @@ def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1), logger=logger):
 
 def train(sess, coder, dataset, train_idx, logger=logger,
           training_epochs=10, learning_rate=0.001, batch_size=100,
-          costing=functions.cross_entropy, bptt=None, skips=None):
+          costing=functions.cross_entropy, bptt=None):
     """
     Train a networks object on given data.
 
@@ -158,9 +158,8 @@ def train(sess, coder, dataset, train_idx, logger=logger,
     train_idx: split dataset into training and validation across this index.
     """
 
-    kwargs = {'skips': skips}
-    if bptt: kwargs['store'] = True
-    cost = coder.cost(*coder.train_args, function=costing, **kwargs)
+    train_args = coder.init_train_args(train='target')
+    cost = coder.cost(*train_args, function=costing, store=bptt)
     
     train_step = get_trainer(cost, learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
@@ -197,7 +196,7 @@ def label_train(sess, coder, dataset, labels, train_idx,
     dataset, labels: dataset for training, with associated labels.
     """
 
-    train_args = coder.train_args + [tf.placeholder(tf.int32, shape=[None])]
+    train_args = coder.init_train_args() + [tf.placeholder(tf.int32, shape=[None])]
     train_step = get_trainer(coder.label_cost(*train_args),
                              learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
