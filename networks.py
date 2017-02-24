@@ -1211,7 +1211,7 @@ class RNN(Coder):
         """
 
         if states is None: states = []
-        for i, row in enumerate(tf.unpack(tf.transpose(inputs, perm=[2, 0, 1]))):
+        for i, row in enumerate(tf.unstack(tf.transpose(inputs, perm=[2, 0, 1]))):
             if skips and (i / skips) % 2:
                 input = outputs[-1] if outputs is not None else \
                         self.get_output(states[-1])
@@ -1358,7 +1358,7 @@ class RNN(Coder):
 
         # For bottom half of feature image.
         batch = tf.placeholder(self.dtype, [batch_size, self.n_hidden])
-        predicted, _ = self.predict_sequence(None, batch, length)
+        predicted = self.predict_sequence(None, batch, length)
         outputs = []
         for index in range(n_batches):
             o = predicted.eval(feed_dict={batch: states[index * batch_size :
