@@ -15,7 +15,6 @@ import numpy as np
 from numpy.random import randint, random_sample, randn
 import cPickle
 from collections import OrderedDict
-from scipy.stats import multivariate_normal
 
 from tamarind.functions import sigmoid, unit_scale, logit
 from tamarind import arrays
