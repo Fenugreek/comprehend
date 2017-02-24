@@ -223,8 +223,9 @@ if __name__ == '__main__':
         if args.features and hasattr(coder, 'features'):
             results = coder.features(dataset[train_idx:]).squeeze()
             results = results[features.corrsort(results, use_tsp=True)]
-            if args.data is None: #mnist. Prepare to tile weights.
-                results = results.reshape((-1, 28, 28))
+            if args.data is None:
+                #mnist. Prepare to tile weights if necessary.
+                if results.ndim==2: results = results.reshape((-1, 28, 28))
             if results.ndim == 3:
                 results = features.tile(results, scale=True)
             if args.output is None:
