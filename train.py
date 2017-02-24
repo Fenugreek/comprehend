@@ -158,7 +158,7 @@ def train(sess, coder, dataset, train_idx, logger=logger,
     train_idx: split dataset into training and validation across this index.
     """
 
-    train_args = coder.init_train_args(train='target')
+    train_args = coder.init_train_args()
     cost = coder.cost(*train_args, function=costing, store=bptt)
     
     train_step = get_trainer(cost, learning_rate=learning_rate)
