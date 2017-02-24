@@ -23,7 +23,8 @@ From the directory where you downloaded the files, run the following command-lin
 
 Or simply place all files into a directory called `comprehend/` somewhere in your `$PYTHONPATH`.
 
-**Dependencies** : [TensorFlow](https://www.tensorflow.org/) and its dependencies, [matplotlib](http://matplotlib.org/), [scipy](http://www.scipy.org/), [Fenugreek/tamarind](https://github.com/Fenugreek/tamarind), and [dmishin/tsp-solver](https://github.com/dmishin/tsp-solver).
+**Dependencies** : [TensorFlow](https://www.tensorflow.org/) and its dependencies, [matplotlib](http://matplotlib.org/),
+[Fenugreek/tamarind](https://github.com/Fenugreek/tamarind), and [dmishin/tsp-solver](https://github.com/dmishin/tsp-solver).
 
 Usage
 ---------------
