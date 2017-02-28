@@ -111,7 +111,7 @@ def get_label_costs(coder, dataset, labels, batch_size=100):
     return (cost / n_batches, error / n_batches)
 
 
-def get_mean_cost(cost, tf_args, datas, batch_size=100, sqrt=True):
+def get_mean_cost(cost, tf_args, datas, batch_size=100, sqrt=False):
     """
     Return average cost across data.
     """
@@ -171,8 +171,10 @@ def train(sess, coder, datas, train_idx, logger=logger,
     sess.run(tf.global_variables_initializer())    
 
     valids = [d[train_idx:] for d in datas]
+    cost_args = {'batch_size': batch_size,
+                 'sqrt': cost_fn == tf.squared_difference}
     logger.info('Initial cost {:.4f}',
-                get_mean_cost(cost, train_args, valids, batch_size))
+                get_mean_cost(cost, train_args, valids, **cost_args))
     
     n_train_batches = train_idx // batch_size
     if bptt: n_batch_seqs = dataset.shape[2] // bptt
@@ -193,7 +195,7 @@ def train(sess, coder, datas, train_idx, logger=logger,
                                               for t, d in zip(train_args, datas)))
                 
         logger.info('Training epoch ' +str(epoch)+ ' cost {:.4f}',
-                    get_mean_cost(cost, train_args, valids, batch_size))
+                    get_mean_cost(cost, train_args, valids, **cost_args))
 
 
 def rnn_extend(sess, coder, inputs, skips=None, length=1):
