@@ -242,7 +242,7 @@ class Coder(object):
         return self.get_reconstructed_input(y, **kwargs)
 
 
-    def cost(self, inputs, function=functions.cross_entropy, **kwargs):
+    def recode_cost(self, inputs, function=functions.cross_entropy, **kwargs):
         """
         Cost for given input batch of samples, under current params.
         Mean cross entropy between input and encode-decoded input.
@@ -270,6 +270,10 @@ class Coder(object):
         return tf.reduce_mean(function(hidden, targets))
 
 
+    def mode_cost(self, mode, *args, **kwargs):
+        return getattr(self, mode + '_cost')(*args, **kwargs)
+    
+            
     def rms_loss(self, inputs, **kwargs):
         """
         Root-mean-squared difference between <inputs> and encoded-decoded output.

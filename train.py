@@ -127,7 +127,7 @@ def get_mean_cost(cost, tf_args, datas, batch_size=100, sqrt=False):
     return sum_cost / n_batches
 
 
-def get_trainer(cost, learning_rate=.001, grad_clips=(-1, 1), logger=logger):
+def get_trainer(cost, learning_rate=.001, grad_clips=(-.5, .5), logger=logger):
     """Return opertation that trains parameters, given cost tensor."""
 
     opt = tf.train.AdamOptimizer(learning_rate)
@@ -160,12 +160,9 @@ def train(sess, coder, datas, train_idx, logger=logger,
 
     shuffle: Shuffle training data after each epoch.
     """
-    train_attrs = {'recode': {'cost': coder.cost},
-                   'target': {'cost': coder.target_cost},
-                   'label': {'cost': coder.label_cost},}
 
     train_args = coder.init_train_args(mode=mode)
-    cost = train_attrs[mode]['cost'](*train_args, function=cost_fn)
+    cost = coder.mode_cost(mode, *train_args, function=cost_fn)
     
     train_step = get_trainer(cost, learning_rate=learning_rate)
     sess.run(tf.global_variables_initializer())    
