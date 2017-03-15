@@ -898,7 +898,7 @@ class RBM(Auto):
         return self.chain_end
     
 
-    def cost(self, inputs, chain_sample, **kwargs):
+    def recode_cost(self, inputs, chain_sample, **kwargs):
         """
         Cost for given input batch of samples, under current params.
         Using free energy and contrastive divergence.
@@ -1075,7 +1075,7 @@ class ERBM(RBM):
         return self.train_args
 
 
-    def cost(self, v, h, chain_v, chain_h):
+    def recode_cost(self, v, h, chain_v, chain_h):
         """
         Cost for given input batch of samples, under current params.
         Using energy and contrastive divergence.
@@ -1533,7 +1533,7 @@ class VAE(Coder):
                              self.params['bMhx'])
 
 
-    def cost(self, inputs, variation, eps=1e-5, **kwargs):
+    def recode_cost(self, inputs, variation, eps=1e-5, **kwargs):
         """
         Cost for given input batch of samples, under current params.
         """

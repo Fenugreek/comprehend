@@ -39,6 +39,9 @@ def corrupt(dataset, corruption):
 def get_costs(coder, dataset, batch_size=100, cost_fn=functions.cross_entropy,
               bptt=None):
     """
+    DEPRECATED-- use get_mean_cost(); keeping this because this supports
+    bptt option whereas get_mean_cost() does not as yet.
+    
     Return average cost function value and rms-loss value on validation
     set by coder object with its current weights.
     """
@@ -111,7 +114,7 @@ def get_label_costs(coder, dataset, labels, batch_size=100):
     return (cost / n_batches, error / n_batches)
 
 
-def get_mean_cost(cost, tf_args, datas, batch_size=100, sqrt=False):
+def get_mean_cost(coder, cost, datas, batch_size=100, sqrt=False):
     """
     Return average cost across data.
     """
@@ -120,8 +123,8 @@ def get_mean_cost(cost, tf_args, datas, batch_size=100, sqrt=False):
     sum_cost = 0.
     for index in range(n_batches):
         sliced = slice(index * batch_size, (index+1) * batch_size)
-        b_cost = cost.eval(feed_dict=dict((t, d[sliced])
-                                          for t, d in zip(tf_args, datas)))
+        batch_datas = [d[sliced] for d in datas]
+        b_cost = cost.eval(feed_dict=coder.train_feed(*batch_datas))
         sum_cost += b_cost if not sqrt else b_cost**.5
         
     return sum_cost / n_batches
@@ -171,7 +174,7 @@ def train(sess, coder, datas, train_idx, logger=logger,
     cost_args = {'batch_size': batch_size,
                  'sqrt': cost_fn == tf.squared_difference}
     logger.info('Initial cost {:.4f}',
-                get_mean_cost(cost, train_args, valids, **cost_args))
+                get_mean_cost(coder, cost, valids, **cost_args))
     
     n_train_batches = train_idx // batch_size
     if bptt: n_batch_seqs = dataset.shape[2] // bptt
@@ -184,15 +187,15 @@ def train(sess, coder, datas, train_idx, logger=logger,
             if bptt:
                 for seq in range(n_batch_seqs):
                     seq_slice = slice(seq * bptt, (seq+1) * bptt)
-                    train_step.run(feed_dict=dict((t, d[sliced][:, :, seq_slice])
-                                                  for t, d in zip(train_args, datas)))
+                    batch_datas = [d[sliced][:, :, seq_slice] for d in datas]
+                    train_step.run(feed_dict=coder.train_feed(*batch_datas))
                 coder.reset_state()
             else:
-                train_step.run(feed_dict=dict((t, d[sliced])
-                                              for t, d in zip(train_args, datas)))
+                batch_datas = [d[sliced] for d in datas]
+                train_step.run(feed_dict=coder.train_feed(*batch_datas))
                 
         logger.info('Training epoch ' +str(epoch)+ ' cost {:.4f}',
-                    get_mean_cost(cost, train_args, valids, **cost_args))
+                    get_mean_cost(coder, cost, valids, **cost_args))
 
 
 def rnn_extend(sess, coder, inputs, skips=None, length=1):
