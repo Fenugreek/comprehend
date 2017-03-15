@@ -11,7 +11,7 @@ Autoencoders, denoising autoencoders, RBMs, Conv nets and RNNs are implemented, 
 - **layers**: Implements multiple layers of architectures defined in **networks**.
 
 ### Test script:
-- **run.py** : Train the network specified on MNIST data, (optionally) saving params learnt to disk. (Optionally) display features learnt, and results of reconstruction on corrupted input.
+- **run.py** : Train the specified network on data in given filenames (MNIST by default), (optionally) saving params learnt to disk. (Optionally) display features learnt, and if MNIST, results of reconstruction on corrupted input.
 
 Installation
 ------------
@@ -30,38 +30,68 @@ Usage
 ---------------
 
 ```
-$ python test.py --help
-usage: test.py [-h] [--model <model>] [--params <filename.dat>]
-               [--data <filename.dat>] [--output <path/prefix>]
-               [--learning_rate R] [--batch N] [--hidden N] [--epochs N]
-               [--random_seed N] [--use_tsp] [--mosaic] [--verbose]
+$ python run.py --help
+usage: run.py [-h] [--model <model>] [--module <module>]
+              [--fromfile <filename.dat>] [--add <model>] [--visible N]
+              [--hidden N] [--options <option>=<integer>[,<integer>...]
+              [<option>=<integer>[,<integer>...] ...]]
+              [--data <filename.blp> [<filename.blp> ...]]
+              [--labels <filename.blp>] [--targets <filename.blp>]
+              [--permute <filename.blp>] [--prep_data <filename.blp>]
+              [--validation R] [--batch N] [--bptt N] [--epochs N]
+              [--learning R] [--random_seed N] [--output <path/prefix>]
+              [--loss] [--dump {hidden|recode|<custom method>}] [--features]
+              [--log log_level]
 
-Train various TensorFlow models from the commandline, (optionally) saving
-params learnt to disk.
+Load/construct various NN models from the commandline, train/run them on data,
+save to disk.
 
 optional arguments:
   -h, --help            show this help message and exit
   --model <model>       network architecture to load from networks module.
-                        Auto, Denoising, RBM, RNN or VAE.
-  --params <filename.dat>
-                        previous params_final.dat file to load from and resume
+                        e.g. Auto, Denoising, RBM, RNN, VAE.
+  --module <module>     find <model> in this module (defaults to module
+                        supplied with this library).
+  --fromfile <filename.dat>
+                        previous params.dat file to load from and resume
                         training.
-  --data <filename.dat>
-                        data file to use for training. Default: MNIST
+  --add <model>         network layer to add to architecture loaded fromfile.
+  --visible N           number of visible units; inferred from data if not
+                        specified
+  --hidden N            number of hidden units
+  --options <option>=<integer>[,<integer>...] [<option>=<integer>[,<integer>...] ...]
+                        options to pass to constructor of network
+                        architecture; only integers supported for now.
+  --data <filename.blp> [<filename.blp> ...]
+                        data file(s) to use for training. If multiple, they
+                        are joined.
+  --labels <filename.blp>
+                        data file with labels for classification training.
+  --targets <filename.blp>
+                        data file with targets for mapping training.
+  --permute <filename.blp>
+                        Permute order of rows in input data according to
+                        indices in this file.
+  --prep_data <filename.blp>
+                        Supply optional auxiliary file here for post-
+                        processing data by NN object's prep_data method, if
+                        any.
+  --validation R        fraction of dataset to use as validation set.
+  --batch N             size of each mini-batch
+  --bptt N              backpropagation through time; no. of timesteps
+  --epochs N            No. of epochs to train.
+  --learning R          learning rate for gradient descent algorithm
+  --random_seed N       Seed random number generator with this, for repeatable
+                        results.
   --output <path/prefix>
                         output params and figures to
                         <path/prefix>{params,features,mosaic}.dat.
-  --learning_rate R     learning rate for gradient descent algorithm
-  --batch N             size of each mini-batch
-  --hidden N            number of hidden units
-  --epochs N            No. of epochs to train.
-  --random_seed N       Seed random number generator with this, for repeatable
-                        results.
-  --use_tsp             Use Traveling Salesman Problem solver when arranging
-                        features for display (takes time).
-  --mosaic              Display learnt model's reconstruction of corrupted
-                        input.
-  --verbose             print progress
+  --loss                Print r.m.s. loss on validation data.
+  --dump {hidden|recode|<custom method>}
+                        dump computed hidden or recoded values to disk. Needs
+                        --output to be specified also.
+  --features            Print image visualization of weights to disk.
+  --log log_level       debug, info, warning, error or critical.
 ```
 
 Sample command-line and output:
