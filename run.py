@@ -252,7 +252,7 @@ if __name__ == '__main__':
                     pyplot.imsave(args.output+'stimuli.png', results, origin='upper')
 
             if args.data is None: #mnist. Perform additional visualization.
-                results = mnist.test_coder(coder, dataset[train_idx:train_idx+100])
+                results = mnist.test_coder(coder, datas[0][train_idx:train_idx+100])
                 img = mnist.mosaic(results, show=args.output is None)
                 if args.output:
                     pyplot.imsave(args.output+'mosaic.png', img, origin='upper')
