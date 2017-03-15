@@ -257,7 +257,8 @@ class Coder(object):
         i.e. Cost for given input batch of samples, under current params.
         """
         hidden = self.get_hidden_values(inputs, **kwargs)
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(hidden, labels)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=hidden,
+                                                              labels=labels)
         return tf.reduce_mean(loss)
 
 
@@ -280,8 +281,7 @@ class Coder(object):
         """
         loss = tf.squared_difference(inputs, self.recode(inputs, **kwargs))
         return tf.reduce_mean(
-                        tf.reduce_mean(loss,
-                                       reduction_indices=range(1, self.input_dims)) ** .5)
+                   tf.reduce_mean(loss, axis=range(1, self.input_dims)) ** .5)
 
 
 class Auto(Coder):
@@ -397,8 +397,7 @@ class Denoising(Auto):
         """
         loss = functions.cross_entropy(inputs, self.recode(corrupts, **kwargs))
         return tf.reduce_mean(
-                        tf.reduce_sum(loss,
-                                      reduction_indices=range(1, self.input_dims)))
+                        tf.reduce_sum(loss, axis=range(1, self.input_dims)))
 
 
     def cost_args(self, data):
@@ -794,8 +793,7 @@ class RBM(Auto):
         Wx_b = tf.matmul(v, self.params['W']) + self.params['bhid']
         vbias_term = tf.squeeze(tf.matmul(v, tf.expand_dims(self.params['bvis'],
                                                             1)))
-        hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)),
-                                    reduction_indices=[1])
+        hidden_term = tf.reduce_sum(tf.log(1 + tf.exp(Wx_b)), axis=[1])
 
         return -hidden_term - vbias_term
     
@@ -1002,7 +1000,7 @@ class RRBM(RBM):
 
     def free_energy(self, v):
         return RBM.free_energy(self, v) + \
-               .5 * tf.reduce_sum((v - .5)**2, reduction_indices=[1])
+               .5 * tf.reduce_sum((v - .5)**2, axis=[1])
 
 
     def sample_v_given_h(self, h, eps=1e-5):
@@ -1248,9 +1246,9 @@ class RNN(Coder):
             self.set_state(store_state)
         
         if not as_list:
-            states = tf.transpose(tf.pack(states), perm=[1, 2, 0])
+            states = tf.transpose(tf.stack(states), perm=[1, 2, 0])
             if outputs is not None:
-                outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
+                outputs = tf.transpose(tf.stack(outputs), perm=[1, 2, 0])
 
         if outputs is None: return states
         else: return outputs, states
@@ -1281,7 +1279,7 @@ class RNN(Coder):
                                 outputs=[inputs[:, :, 0]],
                                 states=[], as_list=True, store=store)
 
-        return tf.transpose(tf.pack(outputs[:-1]), perm=[1, 2, 0])
+        return tf.transpose(tf.stack(outputs[:-1]), perm=[1, 2, 0])
 
 
     def predict_sequence(self, inputs, state, length,
@@ -1308,8 +1306,8 @@ class RNN(Coder):
             if ret_states: states.append(state)
             
         if not as_list:
-            outputs = tf.transpose(tf.pack(outputs), perm=[1, 2, 0])
-            if ret_states: states = tf.transpose(tf.pack(states), perm=[1, 2, 0])
+            outputs = tf.transpose(tf.stack(outputs), perm=[1, 2, 0])
+            if ret_states: states = tf.transpose(tf.stack(states), perm=[1, 2, 0])
 
         if ret_states: return outputs, states
         else: return outputs

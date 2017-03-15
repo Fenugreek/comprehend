@@ -101,8 +101,8 @@ def get_label_costs(coder, dataset, labels, batch_size=100):
         labels_batch = labels[index * batch_size : (index+1) * batch_size]
         predicted = coder.get_hidden_values(batch)
         
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(predicted,
-                                                              labels_batch)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=predicted,
+                                                              labels=labels_batch)
         cost += tf.reduce_mean(loss).eval()
 
         bad_prediction = tf.not_equal(tf.argmax(predicted , 1), labels_batch)
