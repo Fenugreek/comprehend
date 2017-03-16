@@ -113,7 +113,7 @@ class Coder(object):
     def init_params(self, **kwargs):
         pass
 
-    def init_train_args(self, mode='recode', **kwargs):
+    def init_train_args(self, mode='recode'):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None, self.n_visible])]
@@ -218,9 +218,11 @@ class Coder(object):
         return [dataset]
 
 
-    def train_feed(self, *data):
+    def train_feed(self, *data, **kwargs):
         """Return feed_dict based on data to be used for training."""
-        return dict((t, d) for t, d in zip(self.train_args, data))
+        train_args = self.train_args if hasattr(self, 'train_args') else \
+                     self.init_train_args(**kwargs)
+        return dict((t, d) for t, d in zip(train_args, data))
 
 
     def get_hidden_values(self, inputs, **kwargs):
@@ -373,7 +375,7 @@ class Denoising(Auto):
         self.corruption = corruption
 
 
-    def init_train_args(self, mode='recode', **kwargs):
+    def init_train_args(self, mode='recode'):
         # Train args has an additional element:
         #   the corrupted version of the input.
         self.train_args = [tf.placeholder(self.dtype,
@@ -477,7 +479,7 @@ class Conv(Coder):
         return [self.batch_size] + dims + [self.n_hidden]
 
 
-    def init_train_args(self, mode='recode', **kwargs):
+    def init_train_args(self, mode='recode'):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(self.dtype,
                                           shape=[None] + self.shapes[0])]
@@ -1166,7 +1168,7 @@ class RNN(Coder):
                                           name='bout', trainable=trainable)
 
 
-    def init_train_args(self, mode='recode', **kwargs):
+    def init_train_args(self, mode='recode'):
         # To be used for training by tf.Optimizer objects.
         self.train_args = [tf.placeholder(self.dtype, name='train',
                                           shape=[None, self.n_visible, self.seq_length])]
@@ -1474,7 +1476,7 @@ class VAE(Coder):
 
     def init_train_args(self, **kwargs):
         # Train args has an additional element: sampling from latent space
-        Coder.init_train_args(self, **kwargs)
+        Coder.init_train_args(self, mode='recode')
         self.train_args.append(tf.placeholder(float_dt,
                                               shape=[None, self.n_z]))
         return self.train_args

@@ -44,9 +44,9 @@ class Layers(networks.Conv):
             self.batch_size = batch_size            
 
 
-    def init_train_args(self, train='recode', **kwargs):
-        self.train_args = self.coders[0].init_train_args(train='recode', **kwargs)
-        if train == 'target':
+    def init_train_args(self, mode='recode'):
+        self.train_args = self.coders[0].init_train_args(mode='recode')
+        if mode == 'target':
             self.train_args.append(tf.placeholder(self.dtype,
                                                   shape=[None, self.n_hidden]))
         return self.train_args

@@ -226,8 +226,8 @@ if __name__ == '__main__':
                 subset = [d[sli] for d in datas]
                 print "Cost, loss on %s samples: %.4f %.4f" % \
                       ('subset train' if count else 'validation',
-                       train.get_mean_cost(cost, train_args, subset, batch_size=args.batch),
-                       train.get_mean_cost(loss, train_args, subset, batch_size=args.batch))
+                       train.get_mean_cost(coder, cost, subset, batch_size=args.batch),
+                       train.get_mean_cost(coder, loss, subset, batch_size=args.batch))
                    
 
         if args.features and hasattr(coder, 'features'):
