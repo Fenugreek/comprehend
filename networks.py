@@ -319,10 +319,19 @@ class Auto(Coder):
                                           name='bvis', trainable=trainable)
 
         
-    def get_hidden_values(self, inputs, **kwargs):
+    def get_hidden_values(self, inputs, normalize=False, eps=1e-8,**kwargs):
         """Computes the values of the hidden layer."""
-        return self.coding(tf.matmul(inputs, self.params['W']) +
-                           self.params['bhid'])
+        
+        argument = tf.matmul(inputs, self.params['W'])
+        if not normalize: return self.coding(argument + self.params['bhid'])
+
+        argument -= tf.reduce_mean(argument, axis=0)
+        argument /= (tf.reduce_mean(argument**2., axis=0) + eps) ** .5
+
+        input_std = tf.reduce_mean((inputs - tf.reduce_mean(inputs))**2.) ** .5 + eps
+        return self.coding(argument) * input_std * \
+               (1. + tf.nn.elu(self.params['bvis'][:self.n_hidden])) + \
+               self.params['bhid']
 
 
     def get_reconstructed_input(self, hidden, **kwargs):

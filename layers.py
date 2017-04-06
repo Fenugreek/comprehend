@@ -14,7 +14,7 @@ class Layers(networks.Conv):
     """
     
     def __init__(self, coders=None, fromfile=None, batch_size=100,
-                 verbose=False, **kwargs):
+                 batch_normalize=False, verbose=False, **kwargs):
         """
         Provide a list of networks objects <coders>, or a saved params file.
         """
@@ -33,6 +33,7 @@ class Layers(networks.Conv):
             if not is_handle: save_file.close()
 
         self.verbose = verbose
+        self.batch_normalize = batch_normalize
         self.input_dims = self.coders[0].input_dims
         self.output_dims = self.coders[-1].output_dims
         self.n_visible = self.coders[0].n_visible
@@ -101,11 +102,14 @@ class Layers(networks.Conv):
         if layer < 0: layer += len(self.coders)
         coders = self.coders[:layer+1]
 
-        values = coders[0].get_hidden_values(inputs, store=store, reduced=reduced)
+        values = coders[0].get_hidden_values(inputs, store=store, reduced=reduced,
+                                             normalize=self.batch_normalize)
         for i in range(1, len(coders)):
             if coders[i-1].output_shape(reduced=reduced) != coders[i].input_shape():
                 values = tf.reshape(values, coders[i].input_shape())
-            values = coders[i].get_hidden_values(values, store=store, reduced=reduced)
+            values = coders[i].get_hidden_values(values, store=store, reduced=reduced,
+                                                 normalize=self.batch_normalize)# and
+#                                                 (i<len(coders) - 1))
 
         return values
 
