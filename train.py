@@ -130,7 +130,7 @@ def get_mean_cost(coder, cost, datas, batch_size=100, sqrt=False):
     return sum_cost / n_batches
 
 
-def get_trainer(cost, learning_rate=.001, grad_clips=(-.5, .5), logger=logger):
+def get_trainer(cost, learning_rate=.001, grad_clips=(-1., 1.), logger=logger):
     """Return opertation that trains parameters, given cost tensor."""
 
     opt = tf.train.AdamOptimizer(learning_rate)
