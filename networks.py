@@ -17,7 +17,7 @@ import cPickle
 from collections import OrderedDict
 
 from tamarind.functions import sigmoid, unit_scale, logit
-from tamarind import arrays
+from tamarind import arrays, logging
 import functions, train
 
 float_dt = tf.float32
@@ -42,7 +42,7 @@ class Coder(object):
     param_names = []
     attr_names = ['n_visible', 'n_hidden']
 
-    def __init__(self, n_visible=784, n_hidden=500, verbose=False,
+    def __init__(self, n_visible=784, n_hidden=500, logger='warning',
                  random_seed=123, params=None, fromfile=None, dtype=float_dt,
                  coding=tf.sigmoid, decoding=None, trainable=True, **kwargs):
         """
@@ -60,8 +60,8 @@ class Coder(object):
         :type n_hidden: int
         :param n_hidden:  number of hidden units
 
-        :type verbose: bool
-        :param verbose:  whether to print certain log messages.
+        :type logger: str or tamarind.logging.Logger object
+        :param logger:  use to output log messages
 
         :type fromfile: str or filehandle
         :param fromfile: initialize params from this saved file
@@ -79,10 +79,14 @@ class Coder(object):
         self.n_hidden = n_hidden
         self.coding = coding
         self.decoding = coding if decoding is None else decoding
-        self.verbose = verbose
         self.dtype = dtype
         if 'batch_size' in kwargs: self.batch_size = kwargs['batch_size']
         
+        if type(logger) == str:
+            name = str(type(self)).split("'")[1]
+            self.logger = logging.Logger(name, logger)
+        else: self.logger = logger
+
         if random_seed is not None: tf.set_random_seed(random_seed)
 
         if params is not None:
@@ -533,7 +537,7 @@ class Conv(Coder):
         outputs = tf.nn.conv2d_transpose(hidden, self.params['W'], shape,
                                          self.strides, padding=self.padding)
         if scale: outputs *= scale
-        
+
         return self.decoding(outputs + self.params['bvis'])
 
 
@@ -621,7 +625,7 @@ class ConvMaxSquare(Conv):
 
     def _pool_overlay(self, pool, overlay):
         
-        pool = tf.select(overlay, pool, self.zeros)
+        pool = tf.where(overlay, pool, self.zeros)
         pool_shape = self.shapes[2]        
         return tf.depth_to_space(tf.reshape(pool, pool_shape[:3] + \
                                     [pool_shape[3] * pool_shape[4]]),
@@ -685,7 +689,6 @@ class ConvMax1D(ConvMaxSquare):
     def get_hidden_values(self, inputs, reduced=False, store=False, **kwargs):
 
         hidden = Conv.get_hidden_values(self, inputs)
-
         pool = tf.reshape(hidden, self.shapes[2])
         if reduced and not store: return tf.reduce_max(pool, 2)
 
@@ -700,7 +703,7 @@ class ConvMax1D(ConvMaxSquare):
 
     def _pool_overlay(self, pool, overlay):
 
-        pool = tf.select(overlay, pool, self.zeros)
+        pool = tf.where(overlay, pool, self.zeros)
         pool_shape = self.shapes[2]
         return tf.reshape(pool, [self.batch_size, pool_shape[1] * pool_shape[2],
                                  1, self.n_hidden])
@@ -898,9 +901,8 @@ class RBM(Auto):
         if not self.persistent or self.chain_end is None:
             self.chain_end = [None, self.sample_h_given_v(inputs)]
         elif len(self.chain_end[1]) != len(inputs):
-            if self.verbose:
-                print('Resetting chain, with new no. of parallel chains: %d'
-                      % len(inputs))
+            self.logger.info('Resetting chain, with new no. of parallel chains: {}',
+                             len(inputs))
             self.chain_end = [None, self.sample_h_given_v(inputs)]
 
         for k in range(self.CDk):
