@@ -1011,9 +1011,15 @@ class RRBM(RBM):
                                            transpose_b=True) +
                                  self.params['bvis'])
 
+
     def free_energy(self, v):
         return RBM.free_energy(self, v) + \
                .5 * tf.reduce_sum((v - .5)**2, axis=[1])
+
+
+    def grad_free_energy(self, inputs):
+        return RBM.grad_free_energy(self, inputs) + \
+               tf.reduce_sum(inputs - .5, axis=[0])
 
 
     def sample_v_given_h(self, h, eps=1e-5):
