@@ -366,6 +366,40 @@ class Auto(Coder):
         self.n_visible = n_hidden
 
         
+class Compute(Coder):
+    """
+    Compute layer with no parameters, where we specify the transformation
+    and inverse transformation as simple functions to the object constructor.
+    
+    Use the coding and decoding keyword args in the constructor to specify
+    these functions.
+
+    Example:
+    We want to use a tanh layer as part of an autoencoder, but the input is
+    in range [0., 1.]. So we add a Compute layer that performs the simple
+    range normalization as follows--
+    normalizer = Compute(n_visible=500, n_hidden=500,
+                         coding=lambda x, **kwargs: 2. * x - 1.,
+                         decoding=lambda x, **kwargs: .5 * (x + 1.))
+    encoder = Auto(n_visible=500, n_hidden=200, coding=tf.tanh)
+    coder = layer.Layers([normalizer, encoder])
+    """
+
+    def init_train_args(self, **kwargs):
+        """No params to train -- return empty list."""
+        self.train_args = []
+        return self.train_args
+
+        
+    def get_hidden_values(self, inputs, **kwargs):
+        return self.coding(inputs, **kwargs)
+
+
+    def get_reconstructed_input(self, hidden, **kwargs):
+        return self.decoding(hidden, **kwargs)
+
+
+
 class Denoising(Auto):
     """
     Denoising Auto-Encoder.
@@ -485,8 +519,6 @@ class Conv(Coder):
             dims = [self.shapes[0][i] / self.strides[i+1] for i in range(2)]
         elif self.padding == 'VALID':
             k_shapes = self.shapes[1][:2]
-            if hasattr(self, 'rate'):
-                k_shapes = [(s - 1) * (self.rate - 1) + s for s in k_shapes]
             dims = [1 + (self.shapes[0][i] - k_shapes[i]) / self.strides[i+1]
                     for i in range(2)]
         return [self.batch_size] + dims + [self.n_hidden]
@@ -518,7 +550,7 @@ class Conv(Coder):
         self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
                                        shape=k_shape + [self.n_hidden],
                                        name='W', trainable=trainable, dtype=self.dtype)
-        self.params['bhid'] = tf.Variable(tf.zeros([self.n_hidden], dtype=self.dtype),
+        self.params['bhid'] = tf.Variable(tf.zeros(self.n_hidden, dtype=self.dtype),
                                           name='bhid', trainable=trainable)
         self.params['bvis'] = tf.Variable(tf.zeros(i_shape, dtype=self.dtype),
                                           name='bvis', trainable=trainable)
@@ -545,6 +577,7 @@ class Conv(Coder):
         """Return n_hidden number of kernel weights."""
         
         return np.rollaxis(self.params['W'].eval(), 3)
+
 
 
 class ConvMaxSquare(Conv):
@@ -944,7 +977,6 @@ class RBM(Auto):
         No. of samples to return. If <initial> is a batch,
         batch number of samples are returned for every <count>.
 
-
         burn:
         Burn these many entries from the start of the Gibbs chain.
 
@@ -1006,7 +1038,7 @@ class RRBM(RBM):
         if self.sigma is None: raise AssertionError('Need to supply sigma param.')
 
         self.hidden = tf.placeholder(self.dtype, name='hidden',
-                                     shape=[self.batch_size, self.n_hidden])
+                                     shape=[None, self.n_hidden])
         self.mean_v = tf.sigmoid(tf.matmul(self.hidden, self.params['W'],
                                            transpose_b=True) +
                                  self.params['bvis'])
@@ -1028,7 +1060,7 @@ class RRBM(RBM):
 
         if not self.beta_sampling:
             rnds = np.random.randn(mean_v.shape[0], mean_v.shape[1]).astype(h.dtype)
-            return np.clip(mean_v + rnds * self.sigma, 0, 1)
+            return np.clip(mean_v + rnds * self.sigma, eps, 1. - eps)
         
         mvvm = mean_v * (1 - mean_v)
         var_v = np.fmin(mvvm, self.sigma**2)
@@ -1048,7 +1080,7 @@ class R3BM(RRBM):
         RRBM.__init__(self, **kwargs)
 
         self.visible = tf.placeholder(self.dtype, name='visible',
-                                      shape=[self.batch_size, self.n_visible])
+                                      shape=[None, self.n_visible])
         self.mean_h = tf.sigmoid(tf.matmul(self.visible, self.params['W']) +
                                  self.params['bhid'])
 
@@ -1059,9 +1091,23 @@ class R3BM(RRBM):
 
         if not self.beta_sampling:
             rnds = np.random.randn(mean_h.shape[0], mean_h.shape[1]).astype(v.dtype)
-            return np.clip(mean_h + rnds * self.sigma, 0, 1)
+            return np.clip(mean_h + rnds * self.sigma, eps, 1. - eps)
         
         mhhm = mean_h * (1 - mean_h)
+
+        # Handle the cases where h is close to 0.0 or 1.0
+        # Normally beta distribution will give a sample close to 0.0 or 1.0,
+        # breaking requirement that there be some variation (sample dispersion
+        # close to 0.0 when it ought to be close to self.sigma).
+        small_h = self.sigma**2 > mhhm
+        small_count = np.sum(small_h)
+        if small_count:
+            # We randomize these cases with probability self.sigma.
+            switch = np.random.rand(small_count) < self.sigma
+            if np.sum(switch):
+                mean_h[small_h][switch] = np.random.rand(np.sum(switch))
+            mhhm = mean_h * (1 - mean_h)
+            
         var_h = np.fmin(mhhm, self.sigma**2)
         operand = (mhhm + 1.5 * eps) / (var_h + eps) - 1
         alpha = mean_h * operand + eps
