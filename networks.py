@@ -188,8 +188,8 @@ class Coder(object):
         self has attribute batch_size.
 
         kind:
-        'hidden' or 'recode'.
-        Values of hidden units, or reconstructed visible units
+        'hidden' or 'recode' or 'reconstuct'.
+        Values of hidden units, autoencoded input, or reconstructed values.
         
         batch_size:
         Compute values for these many rows at a time, to save memory,
@@ -197,13 +197,17 @@ class Coder(object):
         If <self> has <batch_size> as an attribute, that is used by default.
         """
         
-        if kind == 'hidden': kind = 'get_hidden_values'
+        batch_size = self._get_set_batch_size(batch_size) or len(data)
+        if kind == 'reconstruct':
+            kind = 'get_reconstructed_input'
+            shape = [batch_size] + list(self.output_shape()[1:])
+        else:
+            shape = [batch_size] + list(self.input_shape()[1:])
+            if kind == 'hidden': kind = 'get_hidden_values'
         method = getattr(self, kind, None)
         if method is None:
             raise ValueError('Do not understand kind option: ' + kind)
 
-        batch_size = self._get_set_batch_size(batch_size) or len(data)
-        shape = [batch_size] + list(self.input_shape()[1:])
         batch = tf.placeholder(self.dtype, name='batch', shape=shape)
         output = method(batch, **kwargs)
         
@@ -577,6 +581,57 @@ class Conv(Coder):
         """Return n_hidden number of kernel weights."""
         
         return np.rollaxis(self.params['W'].eval(), 3)
+
+
+
+class ConvT(Conv):
+    """
+    Transpose Convolutional Auto-Encoder.
+    """
+
+    def init_params(self, trainable=True, **kwargs):
+
+        i_shape, k_shape = self.shapes
+
+        # Compute effective number of neurons per filter. Ignores padding.
+        conv_out = i_shape[0] * i_shape[1]
+        
+        self.params['W'] = xavier_init(self.n_visible, self.n_hidden * conv_out,
+                                       shape=k_shape + [self.n_hidden],
+                                       name='W', trainable=trainable, dtype=self.dtype)
+        s_hidden = i_shape[:2] + [k_shape[-1]]
+        self.params['bhid'] = tf.Variable(tf.zeros(s_hidden, dtype=self.dtype),
+                                          name='bhid', trainable=trainable)
+        self.params['bvis'] = tf.Variable(tf.zeros(i_shape, dtype=self.dtype),
+                                          name='bvis', trainable=trainable)
+        
+
+    def output_shape(self, **kwargs):
+        if self.padding == 'SAME':
+            dims = [self.shapes[0][i] * self.strides[i+1] for i in range(2)]
+        elif self.padding == 'VALID':
+            k_shapes = self.shapes[1][:2]
+            dims = [1 + (self.shapes[0][i] - k_shapes[i]) * self.strides[i+1]
+                    for i in range(2)]
+        return [self.batch_size] + dims + [self.shapes[1][2]]
+
+
+    def get_hidden_values(self, inputs, **kwargs):
+
+        outputs = tf.nn.conv2d_transpose(inputs, self.params['W'],
+                                         self.output_shape(**kwargs),
+                                         self.strides, padding=self.padding)
+
+        return self.coding(outputs + self.params['bhid'])
+
+
+    def get_reconstructed_input(self, hidden, scale=None, **kwargs):
+        
+        inputs = tf.nn.conv2d(hidden, self.params['W'],
+                              strides=self.strides, padding=self.padding)
+        if scale: inputs *= scale
+
+        return self.decoding(inputs + self.params['bvis'])
 
 
 
