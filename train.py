@@ -130,14 +130,15 @@ def get_mean_cost(coder, cost, datas, batch_size=100, sqrt=False):
     return sum_cost / n_batches
 
 
-def get_trainer(cost, learning_rate=.001, grad_clips=(-1., 1.), logger=logger):
+def get_trainer(cost, learning_rate=.001, grad_clips=(-1., 1.), logger=logger,
+                **kwargs):
     """Return opertation that trains parameters, given cost tensor."""
 
     opt = tf.train.AdamOptimizer(learning_rate)
-    if grad_clips is None: return opt.minimize(cost)
+    if grad_clips is None: return opt.minimize(cost, **kwargs)
 
     grads_vars = []
-    for grad_var in opt.compute_gradients(cost):
+    for grad_var in opt.compute_gradients(cost, **kwargs):
         if grad_var[0] is None:
             if logger is not None:
                 logger.info('No gradient for variable {}', grad_var[1].name)
@@ -149,7 +150,8 @@ def get_trainer(cost, learning_rate=.001, grad_clips=(-1., 1.), logger=logger):
 
 def train(sess, coder, datas, train_idx, logger=logger,
           epochs=10, learning_rate=0.001, batch_size=100,
-          mode='recode', cost_fn=functions.cross_entropy, shuffle=True, bptt=None):
+          mode='recode', cost_fn=functions.cross_entropy,
+          shuffle=True, bptt=None, **kwargs):
     """
     Train a networks object on given data.
 
@@ -167,7 +169,7 @@ def train(sess, coder, datas, train_idx, logger=logger,
     train_args = coder.init_train_args(mode=mode)
     cost = coder.mode_cost(mode, *train_args, function=cost_fn)
     
-    train_step = get_trainer(cost, learning_rate=learning_rate)
+    train_step = get_trainer(cost, learning_rate=learning_rate, **kwargs)
     sess.run(tf.global_variables_initializer())    
 
     valids = [d[train_idx:] for d in datas]
