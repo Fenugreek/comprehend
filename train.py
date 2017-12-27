@@ -159,7 +159,7 @@ def train(sess, coder, datas, train_idx, logger=logger,
 
     coder: networks object that supports cost() and rms_loss() methods.
 
-    dataset: dataset for training.
+    datas: dataset for training.
 
     train_idx: split dataset into training and validation across this index.
 

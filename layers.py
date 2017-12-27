@@ -270,13 +270,14 @@ class DRBM(Layers, networks.RBM):
         for coder in self.coders:
             v = coder.sample_h_given_v(v)
         return v
-
+    
 
     def sample_v_given_h(self, h):
 
         for coder in self.coders[::-1]:
             h = coder.sample_v_given_h(h)
         return h
+
 
 
 class RNN(Layers, networks.RNN):
